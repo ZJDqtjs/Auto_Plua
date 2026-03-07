@@ -1,264 +1,50 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
-from functools import partial
-from datetime import datetime
+import shlex
 import socket
 import struct
 import subprocess
+from datetime import datetime
+from functools import partial
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QFileInfo, QTime
+from PySide6.QtCore import Qt, QSize, QTime
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QSizePolicy,
+    QSpacerItem,
+    QStackedWidget,
+    QStyle,
+    QTextEdit,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
-    QStackedWidget,
-    QCheckBox,
-    QFileDialog,
-    QFrame,
-    QSizePolicy,
-    QSpacerItem,
-    QFileIconProvider,
-    QStyle,
-    QMessageBox,
-    QTextEdit,
 )
 
 from autoplua.config import load_config, save_config
 from autoplua.models import ManagedProgram
+from autoplua.services.opencv_service import OpenCVFlowService
 from autoplua.services.power_service import PowerService
 from autoplua.services.process_service import ProcessService
 from autoplua.services.scheduler_service import SchedulerService
-
-
-SIDEBAR_EXPANDED_STYLE = """
-QPushButton {
-    border: none;
-    padding: 14px 16px;
-    font-size: 16px;
-    text-align: left;
-    background-color: transparent;
-    qproperty-iconSize: 22px 22px;
-}
-QPushButton:checked {
-    background-color: #e5f1ff;
-    color: #0b6ecf;
-    font-weight: 700;
-    border-left: 4px solid #0b6ecf;
-}
-QPushButton:hover:!checked {
-    background-color: #f3f3f3;
-}
-"""
-
-
-SIDEBAR_COLLAPSED_STYLE = """
-QPushButton {
-    border: none;
-    padding: 0;
-    font-size: 16px;
-    text-align: center;
-    background-color: transparent;
-    qproperty-iconSize: 22px 22px;
-}
-QPushButton:checked {
-    background-color: #e5f1ff;
-    color: #0b6ecf;
-    font-weight: 700;
-    border-left: 4px solid #0b6ecf;
-}
-QPushButton:hover:!checked {
-    background-color: #f3f3f3;
-}
-"""
-
-
-class DailyLoopItemWidget(QWidget):
-    def __init__(
-        self,
-        entry: dict,
-        on_toggle_enabled,
-        on_config_clicked,
-        on_start_clicked,
-        on_stop_clicked,
-        on_remove_clicked,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.entry = entry
-        self.filepath = entry.get("command", "")
-        self.filename = entry.get("name") or os.path.basename(self.filepath)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(14)
-
-        self.checkbox = QCheckBox()
-        self.checkbox.setChecked(bool(entry.get("enabled", True)))
-        self.checkbox.setStyleSheet("QCheckBox::indicator { width: 22px; height: 22px; }")
-        layout.addWidget(self.checkbox)
-
-        icon_box = QFrame()
-        icon_box.setFixedSize(64, 64)
-        icon_box.setStyleSheet(
-            "QFrame { background: #f7f7f7; border: 1px solid #d8d8d8; border-radius: 16px; }"
-        )
-        icon_box_layout = QVBoxLayout(icon_box)
-        icon_box_layout.setContentsMargins(10, 10, 10, 10)
-
-        self.icon_label = QLabel()
-        self.icon_label.setFixedSize(44, 44)
-        self.icon_label.setAlignment(Qt.AlignCenter)
-
-        file_info = QFileInfo(self.filepath)
-        icon_provider = QFileIconProvider()
-        icon = icon_provider.icon(file_info)
-        if icon.isNull():
-            icon = self.style().standardIcon(self.style().SP_FileIcon)
-        pixmap = icon.pixmap(QSize(44, 44))
-        if pixmap.isNull():
-            fallback = QIcon.fromTheme("application-x-ms-dos-executable")
-            pixmap = fallback.pixmap(QSize(44, 44)) if not fallback.isNull() else QIcon().pixmap(QSize(44, 44))
-        self.icon_label.setPixmap(pixmap)
-
-        icon_box_layout.addWidget(self.icon_label)
-        layout.addWidget(icon_box)
-
-        center_layout = QVBoxLayout()
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(6)
-
-        self.name_label = QLabel(self.filename)
-        self.name_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #1e1e1e;")
-        center_layout.addWidget(self.name_label)
-
-        self.config_btn = QPushButton("配置")
-        self.config_btn.setCursor(Qt.PointingHandCursor)
-        self.config_btn.setFixedSize(74, 36)
-        self.config_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: 1px solid #2b2b2b;
-                border-radius: 10px;
-                background-color: #ffffff;
-                color: #222;
-                font-size: 16px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #f5f5f5;
-            }
-            """
-        )
-
-        self.start_btn = QPushButton("启动")
-        self.start_btn.setCursor(Qt.PointingHandCursor)
-        self.start_btn.setFixedSize(74, 36)
-        self.start_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: 1px solid #0b6ecf;
-                border-radius: 10px;
-                background-color: #ffffff;
-                color: #0b6ecf;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #eff7ff;
-            }
-            """
-        )
-
-        self.stop_btn = QPushButton("结束")
-        self.stop_btn.setCursor(Qt.PointingHandCursor)
-        self.stop_btn.setFixedSize(74, 36)
-        self.stop_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: 1px solid #b45309;
-                border-radius: 10px;
-                background-color: #ffffff;
-                color: #b45309;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #fff7ed;
-            }
-            """
-        )
-
-        self.remove_btn = QPushButton("移除")
-        self.remove_btn.setCursor(Qt.PointingHandCursor)
-        self.remove_btn.setFixedSize(74, 36)
-        self.remove_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: 1px solid #dc2626;
-                border-radius: 10px;
-                background-color: #ffffff;
-                color: #dc2626;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #fff1f2;
-            }
-            """
-        )
-
-        action_row = QHBoxLayout()
-        action_row.setContentsMargins(0, 0, 0, 0)
-        action_row.setSpacing(8)
-        action_row.addWidget(self.config_btn)
-        action_row.addWidget(self.start_btn)
-        action_row.addWidget(self.stop_btn)
-        action_row.addWidget(self.remove_btn)
-        action_row.addStretch()
-
-        center_layout.addLayout(action_row)
-        center_layout.addStretch()
-        layout.addLayout(center_layout)
-
-        layout.addSpacerItem(QSpacerItem(24, 20, QSizePolicy.Expanding, QSizePolicy.Minimum))
-
-        right_layout = QVBoxLayout()
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(6)
-
-        self.start_time_label = QLabel(f"启动时间 {entry.get('start_time', '00:00')}")
-        self.start_time_label.setStyleSheet("color: #4f4f4f; font-size: 28px;")
-
-        self.end_time_label = QLabel(f"结束时间 {entry.get('end_time', '00:00')}")
-        self.end_time_label.setStyleSheet("color: #4f4f4f; font-size: 28px;")
-
-        right_layout.addStretch()
-        right_layout.addWidget(self.start_time_label, 0, Qt.AlignRight)
-        right_layout.addWidget(self.end_time_label, 0, Qt.AlignRight)
-        right_layout.addStretch()
-
-        layout.addLayout(right_layout)
-        self.setMinimumHeight(96)
-
-        self.checkbox.toggled.connect(on_toggle_enabled)
-        self.config_btn.clicked.connect(on_config_clicked)
-        self.start_btn.clicked.connect(on_start_clicked)
-        self.stop_btn.clicked.connect(on_stop_clicked)
-        self.remove_btn.clicked.connect(on_remove_clicked)
-
-
+from autoplua.ui.program_config_dialog import ProgramConfigDialog
+from autoplua.ui.program_list_item import DailyLoopItemWidget
+from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -266,12 +52,14 @@ class MainWindow(QMainWindow):
         process_service: ProcessService,
         scheduler_service: SchedulerService,
         power_service: PowerService,
+        opencv_flow_service: OpenCVFlowService,
     ) -> None:
         super().__init__()
         self.logger = logger
         self.process_service = process_service
         self.scheduler_service = scheduler_service
         self.power_service = power_service
+        self.opencv_flow_service = opencv_flow_service
 
         self.config = load_config()
         self.program_map: dict[str, ManagedProgram] = {}
@@ -780,10 +568,13 @@ class MainWindow(QMainWindow):
             "name": exe_name,
             "command": filepath,
             "args": [],
+            "launch_args_raw": "",
             "cwd": str(Path(filepath).parent),
             "enabled": True,
             "start_time": "00:00",
             "end_time": "00:00",
+            "time_points": [{"start": "00:00", "end": "00:00"}],
+            "opencv_flow": {"nodes": [], "edges": []},
         }
         self.program_entries.append(entry)
         self._refresh_program_list()
@@ -812,13 +603,22 @@ class MainWindow(QMainWindow):
     def _open_program_config(self, entry: dict) -> None:
         if entry not in self.program_entries:
             return
-        QMessageBox.information(
-            self,
-            "程序配置",
-            f"名称：{entry.get('name', '')}\n路径：{entry.get('command', '')}\n"
-            f"启动时间：{entry.get('start_time', '00:00')}\n结束时间：{entry.get('end_time', '00:00')}\n\n"
-            "当前版本仅提供主页草图对应的配置入口展示。",
-        )
+        dialog = ProgramConfigDialog(entry=entry, parent=self)
+        if dialog.exec() != QDialog.Accepted or not dialog.result_data:
+            return
+
+        entry["launch_args_raw"] = dialog.result_data.get("launch_args_raw", "")
+        entry["args"] = dialog.result_data.get("args", [])
+        time_points = dialog.result_data.get("time_points", [])
+        if isinstance(time_points, list) and time_points:
+            entry["time_points"] = time_points
+            first = time_points[0] if isinstance(time_points[0], dict) else {}
+            entry["start_time"] = str(first.get("start", entry.get("start_time", "00:00")))
+            entry["end_time"] = str(first.get("end", entry.get("end_time", "00:00")))
+        entry["opencv_flow"] = dialog.result_data.get("opencv_flow", {"nodes": [], "edges": []})
+        self._refresh_program_list()
+        self._save_programs_to_config()
+        self._append_log(f"已更新配置：{entry.get('name', '')}")
 
     def _load_programs_from_config(self) -> None:
         saved_programs = self.config.get("programs", [])
@@ -833,14 +633,23 @@ class MainWindow(QMainWindow):
                 continue
             command = raw.get("command", "")
             name = raw.get("name") or os.path.basename(command)
+            loaded_points = raw.get("time_points", [])
+            if not isinstance(loaded_points, list) or not loaded_points:
+                loaded_points = [{
+                    "start": raw.get("start_time", "00:00"),
+                    "end": raw.get("end_time", "00:00"),
+                }]
             entry = {
                 "name": name,
                 "command": command,
                 "args": raw.get("args", []),
+                "launch_args_raw": raw.get("launch_args_raw", ""),
                 "cwd": raw.get("cwd") or (str(Path(command).parent) if command else ""),
                 "enabled": bool(raw.get("enabled", True)),
                 "start_time": raw.get("start_time", "00:00"),
                 "end_time": raw.get("end_time", "00:00"),
+                "time_points": loaded_points,
+                "opencv_flow": raw.get("opencv_flow", {"nodes": [], "edges": []}),
             }
             self.program_entries.append(entry)
 
@@ -856,14 +665,16 @@ class MainWindow(QMainWindow):
         if not command:
             return
         try:
+            resolved_args = self._resolve_program_args(entry)
             managed = ManagedProgram(
                 name=entry.get("name") or os.path.basename(command),
                 command=command,
-                args=entry.get("args", []),
+                args=resolved_args,
                 cwd=entry.get("cwd") or None,
             )
             self.process_service.start(managed)
             self._append_log(f"手动启动：{managed.name}")
+            self._run_post_launch_flow(entry, managed.name)
         except Exception as exc:
             self._append_log(f"手动启动失败：{entry.get('name', command)} - {exc}")
 
@@ -911,19 +722,54 @@ class MainWindow(QMainWindow):
             if not command:
                 continue
             try:
+                resolved_args = self._resolve_program_args(entry)
                 managed = ManagedProgram(
                     name=entry.get("name") or os.path.basename(command),
                     command=command,
-                    args=entry.get("args", []),
+                    args=resolved_args,
                     cwd=entry.get("cwd") or None,
                 )
                 self.process_service.start(managed)
                 started += 1
                 self._append_log(f"已启动：{managed.name}")
+                self._run_post_launch_flow(entry, managed.name)
             except Exception as exc:
                 self._append_log(f"启动失败：{entry.get('name', command)} - {exc}")
 
         QMessageBox.information(self, "启动结果", f"已触发启动 {started} 个程序。")
+
+    @staticmethod
+    def _resolve_program_args(entry: dict) -> list[str]:
+        raw = str(entry.get("launch_args_raw", "")).strip()
+        if raw:
+            try:
+                return shlex.split(raw, posix=False)
+            except ValueError:
+                return entry.get("args", []) if isinstance(entry.get("args", []), list) else []
+
+        args = entry.get("args", [])
+        return args if isinstance(args, list) else []
+
+    def _run_post_launch_flow(self, entry: dict, program_name: str) -> None:
+        launch_args = self._resolve_program_args(entry)
+        if launch_args:
+            self._append_log(f"{program_name} 使用启动参数直启，跳过 OpenCV 兜底流程")
+            return
+
+        flow = entry.get("opencv_flow", {})
+        if not isinstance(flow, dict) or not flow.get("nodes"):
+            self._append_log(f"{program_name} 未配置 OpenCV 流程")
+            return
+
+        success, message = self.opencv_flow_service.run_flow(
+            flow,
+            timeout_seconds=10,
+            default_wait_seconds=1,
+        )
+        if success:
+            self._append_log(f"{program_name} OpenCV 流程执行完成")
+        else:
+            self._append_log(f"{program_name} OpenCV 流程退出：{message}")
 
     def _append_log(self, message: str) -> None:
         self.logger.info(message)
@@ -1120,3 +966,4 @@ class MainWindow(QMainWindow):
         self._save_power_settings()
         settings = self._get_power_settings()
         self._send_wol_packet(settings.get("wol_mac", ""), settings.get("wol_host", "255.255.255.255"))
+

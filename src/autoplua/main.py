@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from autoplua.logger import setup_logger
 from autoplua.services.power_service import PowerService
+from autoplua.services.opencv_service import OpenCVFlowService
 from autoplua.services.process_service import ProcessService
 from autoplua.services.scheduler_service import SchedulerService
 from autoplua.ui.main_window import MainWindow
@@ -22,6 +23,7 @@ def run() -> int:
     process_service = ProcessService()
     scheduler_service = SchedulerService()
     power_service = PowerService()
+    opencv_flow_service = OpenCVFlowService()
 
     scheduler_service.start()
 
@@ -30,6 +32,7 @@ def run() -> int:
         process_service=process_service,
         scheduler_service=scheduler_service,
         power_service=power_service,
+        opencv_flow_service=opencv_flow_service,
     )
     window.show()
 

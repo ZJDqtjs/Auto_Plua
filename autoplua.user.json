@@ -1,0 +1,89 @@
+{
+  "config_version": 2,
+  "profile_name": "default",
+  "programs": [
+    {
+      "name": "Alas.exe",
+      "command": "D:/data/AzurLaneAutoScript/Alas.exe",
+      "args": [],
+      "launch_args_raw": "",
+      "cwd": "D:\\data\\AzurLaneAutoScript",
+      "enabled": true,
+      "start_time": "09:00",
+      "end_time": "10:00",
+      "time_points": [
+        {
+          "start": "09:00",
+          "end": "10:00"
+        }
+      ],
+      "opencv_flow": {
+        "nodes": [
+          {
+            "id": "55bd0ca0-75e4-4d67-82e9-0626e3c49ba6",
+            "module": "start",
+            "title": "启动",
+            "x": 7,
+            "y": 47,
+            "params": {}
+          },
+          {
+            "id": "4a6b8c75-2999-4748-b648-3a0221f35213",
+            "module": "left_click",
+            "title": "左键点击",
+            "x": 243,
+            "y": 36,
+            "params": {
+              "image_path": "D:/35281/下载/R-C商业模式画布.png",
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "id": "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af",
+            "module": "wait",
+            "title": "等待",
+            "x": 496,
+            "y": 111,
+            "params": {
+              "seconds": 3
+            }
+          },
+          {
+            "id": "8c0c91ec-6203-4281-b587-17f3c8b5cc13",
+            "module": "end",
+            "title": "结束",
+            "x": 516,
+            "y": 205,
+            "params": {}
+          }
+        ],
+        "edges": [
+          [
+            "55bd0ca0-75e4-4d67-82e9-0626e3c49ba6",
+            "4a6b8c75-2999-4748-b648-3a0221f35213"
+          ],
+          [
+            "4a6b8c75-2999-4748-b648-3a0221f35213",
+            "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af"
+          ],
+          [
+            "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af",
+            "8c0c91ec-6203-4281-b587-17f3c8b5cc13"
+          ]
+        ]
+      }
+    }
+  ],
+  "schedules": [],
+  "power_enabled": true,
+  "power_settings": {
+    "boot_frequency": "每天",
+    "boot_time": "07:30",
+    "shutdown_frequency": "每天",
+    "shutdown_time": "02:00",
+    "shutdown_action": "睡眠",
+    "login_user": "3528137639@qq.com",
+    "login_password": "24751"
+  }
+}

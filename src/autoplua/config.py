@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "AutoPlua"
+USER_CONFIG_FILENAME = "autoplua.user.json"
 
 
 def _config_dir() -> Path:
@@ -15,12 +16,27 @@ def _config_dir() -> Path:
     return Path.home() / f".{APP_NAME.lower()}"
 
 
-def config_path() -> Path:
+def _workspace_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _legacy_config_path() -> Path:
     return _config_dir() / "config.json"
+
+
+def config_path() -> Path:
+    custom_path = os.getenv("AUTOPLUA_CONFIG_PATH", "").strip()
+    if custom_path:
+        return Path(custom_path).expanduser().resolve()
+
+    workspace_target = _workspace_root() / USER_CONFIG_FILENAME
+    return workspace_target
 
 
 def default_config() -> dict[str, Any]:
     return {
+        "config_version": 2,
+        "profile_name": os.getenv("USERNAME", "default"),
         "programs": [],
         "schedules": [],
         "power_enabled": False,
@@ -43,6 +59,16 @@ def default_config() -> dict[str, Any]:
 def load_config() -> dict[str, Any]:
     path = config_path()
     if not path.exists():
+        legacy = _legacy_config_path()
+        if legacy.exists():
+            try:
+                data = json.loads(legacy.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    merged = {**default_config(), **data}
+                    save_config(merged)
+                    return merged
+            except (json.JSONDecodeError, OSError):
+                pass
         return default_config()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
