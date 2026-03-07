@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 
 from PySide6.QtCore import Qt, QTime
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -151,9 +152,12 @@ class ProgramConfigDialog(QDialog):
         self.canvas.error_raised.connect(lambda msg: QMessageBox.warning(self, "连线限制", msg))
         module_layout.addWidget(self.canvas)
 
+        self.paste_shortcut = QShortcut(QKeySequence.Paste, self)
+        self.paste_shortcut.activated.connect(self._paste_to_selected_node)
+
         guide = QLabel(
             "拖拽上方模块到下方画布，打开【连线模式】后按顺序点击两个模块可连线。"
-            "双击模块可配置参数（点击支持图片识别或手动坐标；无等待模块时默认步骤间隔 1 秒）。"
+            "双击模块可配置参数（点击支持图片识别或手动坐标，支持 Ctrl+V 粘贴截图并在模块下方预览；无等待模块时默认步骤间隔 1 秒）。"
         )
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size: 14px; color: #4b5563;")
@@ -201,6 +205,11 @@ class ProgramConfigDialog(QDialog):
         if dialog.exec() != QDialog.Accepted:
             return
         self.canvas.set_node_params(node_id, dialog.get_data())
+
+    def _paste_to_selected_node(self) -> None:
+        ok = self.canvas.apply_clipboard_image_to_selected_node()
+        if not ok:
+            return
 
     def _save_and_accept(self) -> None:
         launch_args_raw = self.args_input.text().strip()

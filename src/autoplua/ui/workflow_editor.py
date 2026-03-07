@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from PySide6.QtCore import Qt, QMimeData, QPoint, QPointF, Signal
-from PySide6.QtGui import QColor, QDrag, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QDrag, QGuiApplication, QImage, QKeyEvent, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -31,6 +34,55 @@ FLOW_MODULE_TITLES = {
 
 CLICK_MODULES = {"left_click", "right_click"}
 NO_CONFIG_MODULES = {"start", "end", "enter"}
+
+
+def _template_image_dir() -> Path:
+    path = Path(__file__).resolve().parents[3] / "template_image"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def normalize_image_path(raw_path: str) -> str:
+    value = str(raw_path or "").strip()
+    if not value:
+        return ""
+    if value.startswith("file://"):
+        parsed = urlparse(value)
+        candidate = unquote(parsed.path or "")
+        if candidate.startswith("/") and len(candidate) >= 3 and candidate[2] == ":":
+            candidate = candidate[1:]
+        value = candidate
+    return str(Path(value).expanduser())
+
+
+def save_clipboard_image_to_template() -> str | None:
+    clipboard = QGuiApplication.clipboard()
+    if clipboard is None:
+        return None
+
+    mime_data = clipboard.mimeData()
+    if mime_data is None:
+        return None
+
+    image: QImage | None = None
+    if mime_data.hasImage():
+        image = QImage(clipboard.image())
+    elif mime_data.hasUrls() and mime_data.urls():
+        first = mime_data.urls()[0]
+        if first.isLocalFile():
+            image = QImage(first.toLocalFile())
+    elif mime_data.hasText():
+        text_path = normalize_image_path(mime_data.text())
+        image = QImage(text_path)
+
+    if image is None or image.isNull():
+        return None
+
+    filename = f"template_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.png"
+    target = _template_image_dir() / filename
+    if not image.save(str(target), "PNG"):
+        return None
+    return str(target)
 
 
 class ModulePaletteButton(QPushButton):
@@ -87,6 +139,8 @@ class FlowNodeWidget(QFrame):
             self.setFixedSize(124, 74)
         elif self.module_type == "enter":
             self.setFixedSize(124, 82)
+        elif self.module_type in CLICK_MODULES:
+            self.setFixedSize(198, 168)
         else:
             self.setFixedSize(144, 88)
         self.setCursor(Qt.PointingHandCursor)
@@ -97,17 +151,34 @@ class FlowNodeWidget(QFrame):
 
         self.title_label = QLabel(title)
         self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f2937;")
+        self.title_label.setStyleSheet(
+            "font-size: 16px; font-weight: 700; color: #1f2937;"
+            "border: 1px solid #b7c9dd; border-radius: 10px; padding: 4px 6px; background: #ffffff;"
+        )
 
         self.sub_label = QLabel("双击配置")
         self.sub_label.setAlignment(Qt.AlignCenter)
-        self.sub_label.setStyleSheet("font-size: 13px; color: #4b5563;")
+        self.sub_label.setStyleSheet(
+            "font-size: 13px; color: #4b5563;"
+            "border: 1px solid #b7c9dd; border-radius: 9px; padding: 2px 6px; background: #ffffff;"
+        )
+
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setFixedHeight(96)
+        self.preview_label.setStyleSheet("border: 1px dashed #b7c9dd; border-radius: 8px; background: #f8fbff;")
+        self.preview_label.hide()
 
         layout.addWidget(self.title_label)
         if self.module_type not in NO_CONFIG_MODULES:
-            layout.addWidget(self.sub_label)
+            if self.module_type in CLICK_MODULES:
+                self.sub_label.hide()
+            else:
+                layout.addWidget(self.sub_label)
         else:
             self.sub_label.hide()
+        if self.module_type in CLICK_MODULES:
+            layout.addWidget(self.preview_label)
         self._apply_style()
 
     def set_selected(self, selected: bool) -> None:
@@ -116,19 +187,63 @@ class FlowNodeWidget(QFrame):
 
     def set_params(self, params: dict) -> None:
         self.params = dict(params)
+        if self.module_type in CLICK_MODULES:
+            image_path = normalize_image_path(str(self.params.get("image_path", "")))
+            self.params["image_path"] = image_path
+        if self.module_type in CLICK_MODULES:
+            self._refresh_preview()
         if self.module_type in NO_CONFIG_MODULES:
             return
-        if self.params:
-            self.sub_label.setText("已配置")
-        else:
+        if self.module_type not in CLICK_MODULES:
             self.sub_label.setText("双击配置")
+        self._apply_style()
+
+    def _refresh_preview(self) -> None:
+        image_path = normalize_image_path(str(self.params.get("image_path", "")))
+        if not image_path:
+            self.preview_label.clear()
+            self.preview_label.hide()
+            return
+        pix = QPixmap(image_path)
+        if pix.isNull():
+            self.preview_label.clear()
+            self.preview_label.hide()
+            return
+        target_w = max(80, self.preview_label.width() - 8)
+        target_h = max(40, self.preview_label.height() - 8)
+        scaled = pix.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.show()
 
     def _apply_style(self) -> None:
-        border_color = "#0b6ecf" if self._selected else "#c9d6e4"
-        bg = "#f3f8ff" if self._selected else "#ffffff"
+        if self.module_type in NO_CONFIG_MODULES:
+            border_color = "transparent"
+            bg = "transparent"
+        else:
+            is_configured = self._is_configured()
+            base_color = "#16a34a" if is_configured else "#dc2626"
+            border_color = "#0b6ecf" if self._selected else base_color
+            bg = "#f3f8ff" if self._selected else "#ffffff"
         self.setStyleSheet(
             "QFrame { border: 2px solid %s; border-radius: 12px; background: %s; }" % (border_color, bg)
         )
+
+    def _is_configured(self) -> bool:
+        if self.module_type in NO_CONFIG_MODULES:
+            return True
+        if self.module_type in CLICK_MODULES:
+            image_path = normalize_image_path(str(self.params.get("image_path", "")))
+            has_image = bool(image_path and Path(image_path).exists())
+            x = int(self.params.get("x", 0))
+            y = int(self.params.get("y", 0))
+            return has_image or (x, y) != (0, 0)
+        if self.module_type == "scroll":
+            return int(self.params.get("steps", 0)) != 0
+        if self.module_type == "text_input":
+            return bool(str(self.params.get("text", "")).strip())
+        if self.module_type == "wait":
+            return int(self.params.get("seconds", 0)) >= 1
+        return bool(self.params)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -166,6 +281,7 @@ class WorkflowCanvas(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setMinimumHeight(360)
         self.setStyleSheet(
             "QFrame { background: #fbfdff; border: 2px dashed #bfd0e4; border-radius: 16px; }"
@@ -263,6 +379,9 @@ class WorkflowCanvas(QFrame):
         nodes_payload = []
         for node_id, node in self.nodes.items():
             p = node.pos()
+            params = dict(node.params)
+            if node.module_type in CLICK_MODULES:
+                params["image_path"] = normalize_image_path(str(params.get("image_path", "")))
             nodes_payload.append(
                 {
                     "id": node_id,
@@ -270,7 +389,7 @@ class WorkflowCanvas(QFrame):
                     "title": node.title,
                     "x": int(p.x()),
                     "y": int(p.y()),
-                    "params": dict(node.params),
+                    "params": params,
                 }
             )
         return {
@@ -386,6 +505,7 @@ class WorkflowCanvas(QFrame):
             node.set_selected(nid == node_id)
 
     def _on_node_clicked(self, node_id: str) -> None:
+        self.setFocus(Qt.MouseFocusReason)
         self._set_selected(node_id)
 
         if not self.connect_mode:
@@ -432,6 +552,31 @@ class WorkflowCanvas(QFrame):
         self.edges.append((source, target))
         self.update()
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.matches(QKeySequence.Paste):
+            ok = self.apply_clipboard_image_to_selected_node()
+            if not ok:
+                self.error_raised.emit("请先选中一个点击类模块（左键点击/右键点击），并确保剪贴板里是图片。")
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def apply_clipboard_image_to_selected_node(self) -> bool:
+        if not self.selected_node_id:
+            return False
+        node = self.nodes.get(self.selected_node_id)
+        if not node or node.module_type not in CLICK_MODULES:
+            return False
+
+        image_path = save_clipboard_image_to_template()
+        if not image_path:
+            return False
+
+        params = dict(node.params)
+        params["image_path"] = image_path
+        self.set_node_params(node.node_id, params)
+        return True
+
 
 class NodeParamDialog(QDialog):
     def __init__(self, module_type: str, initial: dict | None = None, parent=None):
@@ -448,12 +593,16 @@ class NodeParamDialog(QDialog):
         form.setSpacing(12)
 
         self.image_input = QLineEdit(self.initial.get("image_path", ""))
-        self.image_input.setPlaceholderText("选择用于识图点击的图片（可选）")
+        self.image_input.setPlaceholderText("选择图片或按 Ctrl+V 粘贴截图（自动保存到 template_image）")
         image_row = QHBoxLayout()
         image_row.addWidget(self.image_input)
         browse_btn = QPushButton("选择图片")
         browse_btn.clicked.connect(self._pick_image)
         image_row.addWidget(browse_btn)
+
+        paste_btn = QPushButton("粘贴截图")
+        paste_btn.clicked.connect(self._paste_image_from_clipboard)
+        image_row.addWidget(paste_btn)
 
         self.x_input = QSpinBox()
         self.x_input.setRange(-99999, 99999)
@@ -504,12 +653,28 @@ class NodeParamDialog(QDialog):
             "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)",
         )
         if file_path:
-            self.image_input.setText(file_path)
+            self.image_input.setText(normalize_image_path(file_path))
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.matches(QKeySequence.Paste) and self.module_type in CLICK_MODULES:
+            self._paste_image_from_clipboard()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _paste_image_from_clipboard(self) -> None:
+        if self.module_type not in CLICK_MODULES:
+            return
+
+        image_path = save_clipboard_image_to_template()
+        if not image_path:
+            return
+        self.image_input.setText(normalize_image_path(image_path))
 
     def get_data(self) -> dict:
         if self.module_type in CLICK_MODULES:
             return {
-                "image_path": self.image_input.text().strip(),
+                "image_path": normalize_image_path(self.image_input.text()),
                 "x": self.x_input.value(),
                 "y": self.y_input.value(),
             }

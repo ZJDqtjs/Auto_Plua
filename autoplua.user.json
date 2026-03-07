@@ -9,11 +9,11 @@
       "launch_args_raw": "",
       "cwd": "D:\\data\\AzurLaneAutoScript",
       "enabled": true,
-      "start_time": "09:00",
+      "start_time": "20:03",
       "end_time": "10:00",
       "time_points": [
         {
-          "start": "09:00",
+          "start": "20:03",
           "end": "10:00"
         }
       ],
@@ -34,7 +34,7 @@
             "x": 243,
             "y": 36,
             "params": {
-              "image_path": "D:/35281/下载/R-C商业模式画布.png",
+              "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260307_195151_d5ceef.png",
               "x": 0,
               "y": 0
             }
