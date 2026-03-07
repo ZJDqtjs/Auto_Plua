@@ -23,13 +23,12 @@ pip install -r requirements.txt
 ## 3. 运行
 
 ```powershell
-python autoplua/src/autoplua/main.py
+python src/autoplua/main.py
 ```
 
-也可以先进入子目录后使用模块方式启动：
+也可以直接用模块方式启动：
 
 ```powershell
-cd autoplua
 python -m src.autoplua.main
 ```
 
@@ -38,9 +37,8 @@ python -m src.autoplua.main
 ```text
 Auto_plua/
   requirements.txt
-  autoplua/
-    README.md
-    src/autoplua/
+  src/
+    autoplua/
       main.py
       config.py
       logger.py
