@@ -66,6 +66,9 @@ class MainWindow(QMainWindow):
         self.program_entries: list[dict] = []
         self.runtime_logs: list[str] = []
         self._power_state: dict[str, str] = {"boot": "", "shutdown": ""}
+        self._project_runtime_active = False
+        self._project_runtime_marks: dict[str, str] = {}
+        self._program_runtime_job_id = "program_runtime_tick"
 
         self.setWindowTitle("AutoPlua")
         self.resize(1000, 700)
@@ -400,8 +403,9 @@ class MainWindow(QMainWindow):
                 background-color: #005a9e;
             }
         """)
-        self.launch_btn.clicked.connect(self._launch_checked_programs)
+        self.launch_btn.clicked.connect(self._toggle_project_runtime)
         header_layout.addWidget(self.launch_btn)
+        self._update_launch_button_state()
         layout.addLayout(header_layout)
 
         line = QFrame()
@@ -660,7 +664,7 @@ class MainWindow(QMainWindow):
         for entry in self.program_entries:
             self._add_program_item(entry)
 
-    def _start_single_program(self, entry: dict) -> None:
+    def _start_single_program(self, entry: dict, trigger: str = "manual") -> None:
         command = entry.get("command", "")
         if not command:
             return
@@ -673,18 +677,21 @@ class MainWindow(QMainWindow):
                 cwd=entry.get("cwd") or None,
             )
             self.process_service.start(managed)
-            self._append_log(f"手动启动：{managed.name}")
+            prefix = "定时启动" if trigger == "schedule" else "手动启动"
+            self._append_log(f"{prefix}：{managed.name}")
             self._run_post_launch_flow(entry, managed.name)
         except Exception as exc:
-            self._append_log(f"手动启动失败：{entry.get('name', command)} - {exc}")
+            prefix = "定时启动失败" if trigger == "schedule" else "手动启动失败"
+            self._append_log(f"{prefix}：{entry.get('name', command)} - {exc}")
 
-    def _stop_single_program(self, entry: dict) -> None:
+    def _stop_single_program(self, entry: dict, trigger: str = "manual") -> None:
         name = entry.get("name") or os.path.basename(entry.get("command", ""))
         if not name:
             return
         stopped = self.process_service.stop(name)
         if stopped:
-            self._append_log(f"手动结束：{name}")
+            prefix = "定时结束" if trigger == "schedule" else "手动结束"
+            self._append_log(f"{prefix}：{name}")
         else:
             self._append_log(f"未找到运行中的程序：{name}")
 
@@ -710,33 +717,101 @@ class MainWindow(QMainWindow):
         self.config["programs"] = self.program_entries
         save_config(self.config)
 
-    def _launch_checked_programs(self) -> None:
-        targets = [entry for entry in self.program_entries if entry.get("enabled")]
-        if not targets:
-            QMessageBox.information(self, "提示", "请先勾选要启动的程序。")
+    def _toggle_project_runtime(self) -> None:
+        enabled_targets = [entry for entry in self.program_entries if entry.get("enabled")]
+        if not self._project_runtime_active and not enabled_targets:
+            QMessageBox.information(self, "提示", "请先勾选至少一个项目，再启动运行状态。")
             return
 
-        started = 0
-        for entry in targets:
-            command = entry.get("command", "")
-            if not command:
-                continue
-            try:
-                resolved_args = self._resolve_program_args(entry)
-                managed = ManagedProgram(
-                    name=entry.get("name") or os.path.basename(command),
-                    command=command,
-                    args=resolved_args,
-                    cwd=entry.get("cwd") or None,
-                )
-                self.process_service.start(managed)
-                started += 1
-                self._append_log(f"已启动：{managed.name}")
-                self._run_post_launch_flow(entry, managed.name)
-            except Exception as exc:
-                self._append_log(f"启动失败：{entry.get('name', command)} - {exc}")
+        if self._project_runtime_active:
+            self._stop_project_runtime()
+        else:
+            self._start_project_runtime()
 
-        QMessageBox.information(self, "启动结果", f"已触发启动 {started} 个程序。")
+    def _start_project_runtime(self) -> None:
+        self._project_runtime_active = True
+        self._project_runtime_marks.clear()
+        self._update_launch_button_state()
+        self._append_log("项目调度运行已开启，任务将按配置时间点执行。")
+
+        try:
+            self.scheduler_service.add_interval_job(
+                job_id=self._program_runtime_job_id,
+                seconds=20,
+                func=self._program_runtime_tick,
+            )
+        except Exception as exc:
+            self._project_runtime_active = False
+            self._update_launch_button_state()
+            self._append_log(f"项目调度运行开启失败：{exc}")
+
+    def _stop_project_runtime(self) -> None:
+        self._project_runtime_active = False
+        self._update_launch_button_state()
+        try:
+            self.scheduler_service.remove_job(self._program_runtime_job_id)
+        except Exception:
+            pass
+        self._append_log("项目调度运行已停止。")
+
+    def _update_launch_button_state(self) -> None:
+        if self._project_runtime_active:
+            self.launch_btn.setText("运行中")
+            self.launch_btn.setStyleSheet(
+                "QPushButton { background-color: #16a34a; color: white; border: none; border-radius: 6px;"
+                " padding: 10px 30px; font-size: 16px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #15803d; }"
+            )
+            return
+
+        self.launch_btn.setText("启动")
+        self.launch_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d7; color: white; border: none; border-radius: 6px;"
+            " padding: 10px 30px; font-size: 16px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #005a9e; }"
+        )
+
+    def _program_runtime_tick(self) -> None:
+        if not self._project_runtime_active:
+            return
+
+        now = datetime.now()
+        current_hhmm = now.strftime("%H:%M")
+        day_key = now.strftime("%Y-%m-%d")
+
+        for entry in self.program_entries:
+            if not entry.get("enabled"):
+                continue
+
+            name = entry.get("name") or os.path.basename(entry.get("command", ""))
+            if not name:
+                continue
+
+            time_points = entry.get("time_points", [])
+            if not isinstance(time_points, list) or not time_points:
+                time_points = [{
+                    "start": entry.get("start_time", ""),
+                    "end": entry.get("end_time", ""),
+                }]
+
+            for idx, point in enumerate(time_points):
+                if not isinstance(point, dict):
+                    continue
+
+                start_hhmm = str(point.get("start", "")).strip()
+                end_hhmm = str(point.get("end", "")).strip()
+
+                if start_hhmm and current_hhmm == start_hhmm:
+                    start_mark = f"start|{name}|{idx}|{start_hhmm}"
+                    if self._project_runtime_marks.get(start_mark) != day_key:
+                        self._project_runtime_marks[start_mark] = day_key
+                        self._start_single_program(entry, trigger="schedule")
+
+                if end_hhmm and current_hhmm == end_hhmm:
+                    end_mark = f"end|{name}|{idx}|{end_hhmm}"
+                    if self._project_runtime_marks.get(end_mark) != day_key:
+                        self._project_runtime_marks[end_mark] = day_key
+                        self._stop_single_program(entry, trigger="schedule")
 
     @staticmethod
     def _resolve_program_args(entry: dict) -> list[str]:

@@ -179,10 +179,10 @@ class DailyLoopItemWidget(QWidget):
         multi_suffix = f" (+{len(time_points) - 1})" if len(time_points) > 1 else ""
 
         self.start_time_label = QLabel(f"启动时间 {start_value}{multi_suffix}")
-        self.start_time_label.setStyleSheet("color: #4f4f4f; font-size: 28px;")
+        self.start_time_label.setStyleSheet("color: #4f4f4f; font-size: 18px; font-weight: 600;")
 
         self.end_time_label = QLabel(f"结束时间 {end_value}{multi_suffix}")
-        self.end_time_label.setStyleSheet("color: #4f4f4f; font-size: 28px;")
+        self.end_time_label.setStyleSheet("color: #4f4f4f; font-size: 18px; font-weight: 600;")
 
         right_layout.addStretch()
         right_layout.addWidget(self.start_time_label, 0, Qt.AlignRight)
