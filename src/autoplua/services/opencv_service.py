@@ -24,14 +24,20 @@ class OpenCVFlowService:
     def run_flow(
         self,
         flow: dict[str, Any],
-        timeout_seconds: int = 10,
-        default_wait_seconds: int = 1,
+        timeout_seconds: int = 120,
+        default_wait_seconds: int = 0,
+        startup_wait_seconds: int = 3,
+        step_retry_seconds: int = 20,
     ) -> tuple[bool, str]:
         nodes_chain = self._build_linear_chain(flow)
         if not nodes_chain:
             return True, "empty-flow"
 
         started_at = time.monotonic()
+
+        if str(nodes_chain[0].get("module", "")) == "start" and startup_wait_seconds > 0:
+            if not self._safe_sleep(startup_wait_seconds, started_at, timeout_seconds):
+                return False, f"timeout-{timeout_seconds}s"
 
         for index in range(1, len(nodes_chain)):
             now = time.monotonic()
@@ -46,11 +52,53 @@ class OpenCVFlowService:
                 if not self._safe_sleep(default_wait_seconds, started_at, timeout_seconds):
                     return False, f"timeout-{timeout_seconds}s"
 
-            ok, message = self._execute_node(node=node, started_at=started_at, timeout_seconds=timeout_seconds)
+            if module == "wait":
+                ok, message = self._execute_node(node=node, started_at=started_at, timeout_seconds=timeout_seconds)
+            else:
+                ok, message = self._execute_node_with_retry(
+                    node=node,
+                    started_at=started_at,
+                    timeout_seconds=timeout_seconds,
+                    step_retry_seconds=step_retry_seconds,
+                )
             if not ok:
                 return False, message
 
         return True, "ok"
+
+    def _execute_node_with_retry(
+        self,
+        node: dict[str, Any],
+        started_at: float,
+        timeout_seconds: int,
+        step_retry_seconds: int,
+    ) -> tuple[bool, str]:
+        deadline = min(time.monotonic() + max(1, step_retry_seconds), started_at + timeout_seconds)
+        last_message = "step-not-ready"
+
+        while time.monotonic() <= deadline:
+            ok, message = self._execute_node(node=node, started_at=started_at, timeout_seconds=timeout_seconds)
+            if ok:
+                return True, message
+
+            last_message = message
+            if self._is_non_retryable(message):
+                return False, message
+            time.sleep(0.4)
+
+        return False, f"step-timeout-{step_retry_seconds}s-{last_message}"
+
+    @staticmethod
+    def _is_non_retryable(message: str) -> bool:
+        return message.startswith(
+            (
+                "missing-dependency",
+                "unsupported-module",
+                "invalid-",
+            )
+        ) or message in {
+            "empty-text",
+        }
 
     def _execute_node(self, node: dict[str, Any], started_at: float, timeout_seconds: int) -> tuple[bool, str]:
         module = str(node.get("module", ""))

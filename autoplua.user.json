@@ -9,12 +9,12 @@
       "launch_args_raw": "",
       "cwd": "D:\\data\\AzurLaneAutoScript",
       "enabled": true,
-      "start_time": "20:03",
-      "end_time": "10:00",
+      "start_time": "09:14",
+      "end_time": "10:16",
       "time_points": [
         {
-          "start": "20:03",
-          "end": "10:00"
+          "start": "09:14",
+          "end": "10:16"
         }
       ],
       "opencv_flow": {
@@ -34,19 +34,9 @@
             "x": 243,
             "y": 36,
             "params": {
-              "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260307_195151_d5ceef.png",
+              "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260308_080352_1f2587.png",
               "x": 0,
               "y": 0
-            }
-          },
-          {
-            "id": "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af",
-            "module": "wait",
-            "title": "等待",
-            "x": 496,
-            "y": 111,
-            "params": {
-              "seconds": 3
             }
           },
           {
@@ -65,11 +55,49 @@
           ],
           [
             "4a6b8c75-2999-4748-b648-3a0221f35213",
-            "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af"
-          ],
-          [
-            "2aaf79ae-50bb-4b0d-82c2-a37cb242c1af",
             "8c0c91ec-6203-4281-b587-17f3c8b5cc13"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "BAAH.exe",
+      "command": "D:/data/BAAH2.0.6/BAAH.exe",
+      "args": [],
+      "launch_args_raw": "",
+      "cwd": "D:\\data\\BAAH2.0.6",
+      "enabled": true,
+      "start_time": "18:00",
+      "end_time": "19:00",
+      "time_points": [
+        {
+          "start": "18:00",
+          "end": "19:00"
+        }
+      ],
+      "opencv_flow": {
+        "nodes": [
+          {
+            "id": "28f29ede-e694-4ef1-bb3e-ba11d412d59b",
+            "module": "start",
+            "title": "启动",
+            "x": 60,
+            "y": 156,
+            "params": {}
+          },
+          {
+            "id": "212d8a53-e49f-48da-88c9-fccaa5aff61c",
+            "module": "end",
+            "title": "结束",
+            "x": 406,
+            "y": 201,
+            "params": {}
+          }
+        ],
+        "edges": [
+          [
+            "28f29ede-e694-4ef1-bb3e-ba11d412d59b",
+            "212d8a53-e49f-48da-88c9-fccaa5aff61c"
           ]
         ]
       }

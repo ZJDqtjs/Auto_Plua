@@ -10,7 +10,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QTime
+from PySide6.QtCore import Qt, QSize, QTime, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -45,7 +45,14 @@ from autoplua.services.scheduler_service import SchedulerService
 from autoplua.ui.program_config_dialog import ProgramConfigDialog
 from autoplua.ui.program_list_item import DailyLoopItemWidget
 from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
+
+
 class MainWindow(QMainWindow):
+    app_log_signal = Signal(str)
+    program_log_signal = Signal(str)
+    schedule_start_signal = Signal(object)
+    schedule_stop_signal = Signal(object)
+
     def __init__(
         self,
         logger: logging.Logger,
@@ -65,10 +72,21 @@ class MainWindow(QMainWindow):
         self.program_map: dict[str, ManagedProgram] = {}
         self.program_entries: list[dict] = []
         self.runtime_logs: list[str] = []
+        self.program_runtime_logs: list[str] = []
         self._power_state: dict[str, str] = {"boot": "", "shutdown": ""}
         self._project_runtime_active = False
         self._project_runtime_marks: dict[str, str] = {}
         self._program_runtime_job_id = "program_runtime_tick"
+        self._app_log_follow_tail = True
+        self._program_log_follow_tail = True
+
+        self.app_log_signal.connect(self._handle_append_log)
+        self.program_log_signal.connect(self._handle_append_program_log)
+        self.schedule_start_signal.connect(self._handle_schedule_start)
+        self.schedule_stop_signal.connect(self._handle_schedule_stop)
+
+        self.process_service.set_output_listener(self._on_program_output)
+        self.process_service.set_exit_listener(self._on_program_exit)
 
         self.setWindowTitle("AutoPlua")
         self.resize(1000, 700)
@@ -472,12 +490,29 @@ class MainWindow(QMainWindow):
         line.setStyleSheet("background-color: #ccc; max-height: 1px;")
         layout.addWidget(line)
 
+        app_label = QLabel("AutoPlua 日志")
+        app_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #333;")
+        layout.addWidget(app_label)
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setStyleSheet(
             "QTextEdit { background: #fff; border: 1px solid #d9d9d9; border-radius: 10px; font-size: 14px; }"
         )
+        self.log_text.verticalScrollBar().valueChanged.connect(self._on_app_log_scroll_changed)
         layout.addWidget(self.log_text)
+
+        program_label = QLabel("被启动程序日志（含 Python 终端输出）")
+        program_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #333;")
+        layout.addWidget(program_label)
+
+        self.program_log_text = QTextEdit()
+        self.program_log_text.setReadOnly(True)
+        self.program_log_text.setStyleSheet(
+            "QTextEdit { background: #fff; border: 1px solid #d9d9d9; border-radius: 10px; font-size: 14px; }"
+        )
+        self.program_log_text.verticalScrollBar().valueChanged.connect(self._on_program_log_scroll_changed)
+        layout.addWidget(self.program_log_text)
 
         row = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
@@ -805,13 +840,13 @@ class MainWindow(QMainWindow):
                     start_mark = f"start|{name}|{idx}|{start_hhmm}"
                     if self._project_runtime_marks.get(start_mark) != day_key:
                         self._project_runtime_marks[start_mark] = day_key
-                        self._start_single_program(entry, trigger="schedule")
+                        self.schedule_start_signal.emit(entry)
 
                 if end_hhmm and current_hhmm == end_hhmm:
                     end_mark = f"end|{name}|{idx}|{end_hhmm}"
                     if self._project_runtime_marks.get(end_mark) != day_key:
                         self._project_runtime_marks[end_mark] = day_key
-                        self._stop_single_program(entry, trigger="schedule")
+                        self.schedule_stop_signal.emit(entry)
 
     @staticmethod
     def _resolve_program_args(entry: dict) -> list[str]:
@@ -828,29 +863,84 @@ class MainWindow(QMainWindow):
     def _run_post_launch_flow(self, entry: dict, program_name: str) -> None:
         launch_args = self._resolve_program_args(entry)
         if launch_args:
-            self._append_log(f"{program_name} 使用启动参数直启，跳过 OpenCV 兜底流程")
-            return
+            self._append_log(f"{program_name} 使用启动参数：{' '.join(launch_args)}")
 
         flow = entry.get("opencv_flow", {})
         if not isinstance(flow, dict) or not flow.get("nodes"):
             self._append_log(f"{program_name} 未配置 OpenCV 流程")
             return
 
+        nodes_count = len(flow.get("nodes", [])) if isinstance(flow.get("nodes", []), list) else 0
+        self._append_log(f"{program_name} 开始执行 OpenCV 流程，节点数：{nodes_count}")
+
         success, message = self.opencv_flow_service.run_flow(
             flow,
-            timeout_seconds=10,
-            default_wait_seconds=1,
+            timeout_seconds=180,
+            default_wait_seconds=0,
+            startup_wait_seconds=3,
+            step_retry_seconds=20,
         )
         if success:
             self._append_log(f"{program_name} OpenCV 流程执行完成")
-        else:
-            self._append_log(f"{program_name} OpenCV 流程退出：{message}")
+            return
+
+        if message == "missing-dependency-pyautogui":
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：缺少依赖 pyautogui，请执行 pip install pyautogui"
+            )
+            return
+
+        self._append_log(f"{program_name} OpenCV 流程失败：{message}")
 
     def _append_log(self, message: str) -> None:
+        self.app_log_signal.emit(message)
+
+    def _append_program_log(self, message: str) -> None:
+        self.program_log_signal.emit(message)
+
+    def _handle_append_log(self, message: str) -> None:
         self.logger.info(message)
         self.runtime_logs.append(message)
         if hasattr(self, "log_text"):
             self.log_text.append(message)
+            if self._app_log_follow_tail:
+                self._scroll_textedit_to_bottom(self.log_text)
+
+    def _handle_append_program_log(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        formatted = f"{timestamp} {message}"
+        self.program_runtime_logs.append(formatted)
+
+        try:
+            self._program_log_file_path().parent.mkdir(parents=True, exist_ok=True)
+            with self._program_log_file_path().open("a", encoding="utf-8") as f:
+                f.write(formatted + "\n")
+        except OSError:
+            pass
+
+        if hasattr(self, "program_log_text"):
+            self.program_log_text.append(formatted)
+            if self._program_log_follow_tail:
+                self._scroll_textedit_to_bottom(self.program_log_text)
+
+    def _handle_schedule_start(self, entry: dict) -> None:
+        self._start_single_program(entry, trigger="schedule")
+
+    def _handle_schedule_stop(self, entry: dict) -> None:
+        self._stop_single_program(entry, trigger="schedule")
+
+    def _on_program_output(self, program_name: str, line: str) -> None:
+        self._append_program_log(f"[{program_name}] {line}")
+
+    def _on_program_exit(self, program_name: str, code: int | None) -> None:
+        code_text = "unknown" if code is None else str(code)
+        self._append_program_log(f"[{program_name}] [进程退出] code={code_text}")
+
+    @staticmethod
+    def _program_log_file_path() -> Path:
+        appdata = os.getenv("APPDATA")
+        base = Path(appdata) if appdata else (Path.home() / ".autoplua")
+        return base / "AutoPlua" / "logs" / "program.log"
 
     def _refresh_log_page(self) -> None:
         if not hasattr(self, "log_text"):
@@ -878,11 +968,65 @@ class MainWindow(QMainWindow):
                 unique_lines.append(line)
                 seen.add(line)
         self.log_text.setPlainText("\n".join(unique_lines[-300:]))
+        if self._app_log_follow_tail:
+            self._scroll_textedit_to_bottom(self.log_text)
+
+        if hasattr(self, "program_log_text"):
+            program_lines = []
+            program_lines.extend(self.program_runtime_logs)
+            try:
+                p_log = self._program_log_file_path()
+                if p_log.exists():
+                    file_lines = p_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+                    program_lines.extend(file_lines[-400:])
+            except OSError:
+                pass
+
+            if not program_lines:
+                self.program_log_text.setPlainText("暂无程序日志")
+            else:
+                seen_program = set()
+                unique_program = []
+                for line in program_lines:
+                    if line not in seen_program:
+                        unique_program.append(line)
+                        seen_program.add(line)
+                self.program_log_text.setPlainText("\n".join(unique_program[-600:]))
+                if self._program_log_follow_tail:
+                    self._scroll_textedit_to_bottom(self.program_log_text)
 
     def _clear_logs(self) -> None:
         self.runtime_logs.clear()
+        self.program_runtime_logs.clear()
         if hasattr(self, "log_text"):
             self.log_text.clear()
+            self._app_log_follow_tail = True
+        if hasattr(self, "program_log_text"):
+            self.program_log_text.clear()
+            self._program_log_follow_tail = True
+        try:
+            p_log = self._program_log_file_path()
+            if p_log.exists():
+                p_log.unlink()
+        except OSError:
+            pass
+
+    def _on_app_log_scroll_changed(self, value: int) -> None:
+        if not hasattr(self, "log_text"):
+            return
+        bar = self.log_text.verticalScrollBar()
+        self._app_log_follow_tail = value >= (bar.maximum() - 4)
+
+    def _on_program_log_scroll_changed(self, value: int) -> None:
+        if not hasattr(self, "program_log_text"):
+            return
+        bar = self.program_log_text.verticalScrollBar()
+        self._program_log_follow_tail = value >= (bar.maximum() - 4)
+
+    @staticmethod
+    def _scroll_textedit_to_bottom(editor: QTextEdit) -> None:
+        bar = editor.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _get_power_settings(self) -> dict:
         raw = self.config.get("power_settings", {})
