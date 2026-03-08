@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import threading
@@ -52,26 +53,37 @@ class ProcessService:
         )
         monitor.start()
 
-    def stop(self, program_name: str) -> bool:
+    def stop(self, program_name: str, command: str | None = None) -> bool:
         process = self._children.get(program_name)
         if process and process.poll() is None:
-            process.terminate()
-            self._emit_output(program_name, "[进程终止] 已发送 terminate 信号")
-            return True
+            stopped = self._terminate_process_tree(process.pid, program_name)
+            if stopped:
+                self._children.pop(program_name, None)
+            return stopped
 
+        command_norm = self._normalize_path(command) if command else ""
         for proc in psutil.process_iter(["name", "pid", "cmdline"]):
             try:
-                cmdline = " ".join(proc.info.get("cmdline") or [])
-                if program_name.lower() in cmdline.lower() or program_name.lower() in (proc.info.get("name") or "").lower():
-                    proc.terminate()
-                    self._emit_output(program_name, f"[进程终止] 已终止匹配进程 pid={proc.pid}")
+                cmdline_parts = proc.info.get("cmdline") or []
+                cmdline = " ".join(cmdline_parts)
+                matches_name = (
+                    program_name.lower() in cmdline.lower()
+                    or program_name.lower() in (proc.info.get("name") or "").lower()
+                )
+                matches_command = False
+                if command_norm and cmdline_parts:
+                    first = self._normalize_path(str(cmdline_parts[0]))
+                    matches_command = bool(first) and first == command_norm
+
+                if matches_command or matches_name:
+                    self._terminate_process_tree(proc.pid, program_name)
                     return True
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return False
 
     def restart(self, program: ManagedProgram) -> None:
-        self.stop(program.name)
+        self.stop(program.name, command=program.command)
         self.start(program)
 
     def is_running(self, program_name: str) -> bool:
@@ -123,4 +135,42 @@ class ProcessService:
                 code = process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 code = process.poll()
+            cached = self._children.get(program_name)
+            if cached is process:
+                self._children.pop(program_name, None)
             self._emit_exit(program_name, code)
+
+    def _terminate_process_tree(self, pid: int, program_name: str) -> bool:
+        try:
+            root = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return False
+
+        children = root.children(recursive=True)
+        targets = children + [root]
+
+        for proc in targets:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        gone, alive = psutil.wait_procs(targets, timeout=4)
+
+        for proc in alive:
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        self._emit_output(program_name, f"[进程终止] 已结束进程树 pid={pid} 子进程数={len(children)}")
+        return True
+
+    @staticmethod
+    def _normalize_path(value: str | None) -> str:
+        if not value:
+            return ""
+        try:
+            return os.path.normcase(os.path.normpath(value.strip().strip('"')))
+        except Exception:
+            return ""

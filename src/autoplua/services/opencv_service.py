@@ -25,7 +25,7 @@ class OpenCVFlowService:
         self,
         flow: dict[str, Any],
         timeout_seconds: int = 120,
-        default_wait_seconds: int = 0,
+        default_wait_seconds: int = 2,
         startup_wait_seconds: int = 3,
         step_retry_seconds: int = 20,
     ) -> tuple[bool, str]:
@@ -44,13 +44,8 @@ class OpenCVFlowService:
             if now - started_at > timeout_seconds:
                 return False, f"timeout-{timeout_seconds}s"
 
-            prev_node = nodes_chain[index - 1]
             node = nodes_chain[index]
             module = str(node.get("module", ""))
-
-            if prev_node.get("module") != "wait" and module not in {"wait", "end"}:
-                if not self._safe_sleep(default_wait_seconds, started_at, timeout_seconds):
-                    return False, f"timeout-{timeout_seconds}s"
 
             if module == "wait":
                 ok, message = self._execute_node(node=node, started_at=started_at, timeout_seconds=timeout_seconds)
@@ -63,6 +58,14 @@ class OpenCVFlowService:
                 )
             if not ok:
                 return False, message
+
+            # Default pacing: after an action succeeds, wait briefly before the next step.
+            has_next = index < (len(nodes_chain) - 1)
+            if has_next and module not in {"wait", "end"}:
+                next_module = str(nodes_chain[index + 1].get("module", ""))
+                if next_module not in {"wait", "end"}:
+                    if not self._safe_sleep(default_wait_seconds, started_at, timeout_seconds):
+                        return False, f"timeout-{timeout_seconds}s"
 
         return True, "ok"
 

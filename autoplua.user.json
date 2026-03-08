@@ -9,11 +9,11 @@
       "launch_args_raw": "",
       "cwd": "D:\\data\\AzurLaneAutoScript",
       "enabled": true,
-      "start_time": "09:14",
+      "start_time": "09:40",
       "end_time": "10:16",
       "time_points": [
         {
-          "start": "09:14",
+          "start": "09:40",
           "end": "10:16"
         }
       ],
@@ -81,22 +81,50 @@
             "id": "28f29ede-e694-4ef1-bb3e-ba11d412d59b",
             "module": "start",
             "title": "启动",
-            "x": 60,
-            "y": 156,
+            "x": 63,
+            "y": 158,
             "params": {}
           },
           {
             "id": "212d8a53-e49f-48da-88c9-fccaa5aff61c",
             "module": "end",
             "title": "结束",
-            "x": 406,
-            "y": 201,
+            "x": 789,
+            "y": 137,
             "params": {}
+          },
+          {
+            "id": "22d0ceb0-af31-4c26-b3a9-9e6f06ece8a9",
+            "module": "left_click",
+            "title": "左键点击",
+            "x": 222,
+            "y": 26,
+            "params": {
+              "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260308_092641_700687.png"
+            }
+          },
+          {
+            "id": "151e3827-01b2-4f54-a651-78c716972fe2",
+            "module": "left_click",
+            "title": "左键点击",
+            "x": 492,
+            "y": 36,
+            "params": {
+              "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260308_092703_21afb3.png"
+            }
           }
         ],
         "edges": [
           [
             "28f29ede-e694-4ef1-bb3e-ba11d412d59b",
+            "22d0ceb0-af31-4c26-b3a9-9e6f06ece8a9"
+          ],
+          [
+            "22d0ceb0-af31-4c26-b3a9-9e6f06ece8a9",
+            "151e3827-01b2-4f54-a651-78c716972fe2"
+          ],
+          [
+            "151e3827-01b2-4f54-a651-78c716972fe2",
             "212d8a53-e49f-48da-88c9-fccaa5aff61c"
           ]
         ]

@@ -721,9 +721,10 @@ class MainWindow(QMainWindow):
 
     def _stop_single_program(self, entry: dict, trigger: str = "manual") -> None:
         name = entry.get("name") or os.path.basename(entry.get("command", ""))
+        command = entry.get("command", "")
         if not name:
             return
-        stopped = self.process_service.stop(name)
+        stopped = self.process_service.stop(name, command=command)
         if stopped:
             prefix = "定时结束" if trigger == "schedule" else "手动结束"
             self._append_log(f"{prefix}：{name}")
@@ -876,7 +877,7 @@ class MainWindow(QMainWindow):
         success, message = self.opencv_flow_service.run_flow(
             flow,
             timeout_seconds=180,
-            default_wait_seconds=0,
+            default_wait_seconds=2,
             startup_wait_seconds=3,
             step_retry_seconds=20,
         )
