@@ -29,6 +29,7 @@ class SchedulerService:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
+            misfire_grace_time=max(120, seconds * 4),
         )
 
     def remove_job(self, job_id: str) -> None:

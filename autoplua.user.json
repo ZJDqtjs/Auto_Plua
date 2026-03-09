@@ -129,15 +129,55 @@
           ]
         ]
       }
+    },
+    {
+      "name": "MAA.exe",
+      "command": "D:/data10086/MAA-v5.15.5-win-x64/MAA.exe",
+      "args": [],
+      "launch_args_raw": "",
+      "cwd": "D:\\data10086\\MAA-v5.15.5-win-x64",
+      "enabled": false,
+      "start_time": "00:00",
+      "end_time": "00:00",
+      "time_points": [
+        {
+          "start": "00:00",
+          "end": "00:00"
+        }
+      ],
+      "opencv_flow": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    {
+      "name": "BetterGI.exe",
+      "command": "D:/data/GenshinAuto/BetterGI/BetterGI/BetterGI.exe",
+      "args": [],
+      "launch_args_raw": "",
+      "cwd": "D:\\data\\GenshinAuto\\BetterGI\\BetterGI",
+      "enabled": false,
+      "start_time": "00:00",
+      "end_time": "00:00",
+      "time_points": [
+        {
+          "start": "00:00",
+          "end": "00:00"
+        }
+      ],
+      "opencv_flow": {
+        "nodes": [],
+        "edges": []
+      }
     }
   ],
   "schedules": [],
   "power_enabled": true,
   "power_settings": {
     "boot_frequency": "每天",
-    "boot_time": "07:30",
+    "boot_time": "07:40",
     "shutdown_frequency": "每天",
-    "shutdown_time": "02:00",
+    "shutdown_time": "01:00",
     "shutdown_action": "睡眠",
     "login_user": "3528137639@qq.com",
     "login_password": "24751"

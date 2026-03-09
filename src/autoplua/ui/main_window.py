@@ -6,11 +6,11 @@ import shlex
 import socket
 import struct
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QTime, Signal
+from PySide6.QtCore import Qt, QSize, QTime, Signal, QTimer
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -79,6 +79,8 @@ class MainWindow(QMainWindow):
         self._program_runtime_job_id = "program_runtime_tick"
         self._app_log_follow_tail = True
         self._program_log_follow_tail = True
+        self._last_power_tick_at: datetime | None = None
+        self._scheduled_wake_marker = ""
 
         self.app_log_signal.connect(self._handle_append_log)
         self.program_log_signal.connect(self._handle_append_program_log)
@@ -165,6 +167,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons[0].setChecked(True)
         self.stacked_widget.setCurrentIndex(0)
         self._load_programs_from_config()
+        self._position_start_add_button()
 
     def _build_power_page(self) -> QWidget:
         self.power_stack = QStackedWidget()
@@ -453,12 +456,10 @@ class MainWindow(QMainWindow):
         """)
         layout.addWidget(self.loop_list)
 
-        float_layout = QHBoxLayout()
-        float_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum))
-        add_btn = QPushButton("+")
-        add_btn.setFixedSize(60, 60)
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.setStyleSheet("""
+        self.start_add_btn = QPushButton("+", page)
+        self.start_add_btn.setFixedSize(60, 60)
+        self.start_add_btn.setCursor(Qt.PointingHandCursor)
+        self.start_add_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0078d7;
                 color: white;
@@ -469,11 +470,25 @@ class MainWindow(QMainWindow):
                 background-color: #005a9e;
             }
         """)
-        add_btn.clicked.connect(self._add_exe_file)
-        float_layout.addWidget(add_btn)
-
-        layout.addLayout(float_layout)
+        self.start_add_btn.clicked.connect(self._add_exe_file)
+        self.start_add_btn.raise_()
+        QTimer.singleShot(0, self._position_start_add_button)
         return page
+
+    def _position_start_add_button(self) -> None:
+        if not hasattr(self, "start_add_btn") or not hasattr(self, "start_page"):
+            return
+        page = self.start_page
+        margin_right = 28
+        margin_bottom = 22
+        x = max(0, page.width() - self.start_add_btn.width() - margin_right)
+        y = max(0, page.height() - self.start_add_btn.height() - margin_bottom)
+        self.start_add_btn.move(x, y)
+        self.start_add_btn.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_start_add_button()
 
     def _build_log_page(self) -> QWidget:
         page = QWidget()
@@ -1079,9 +1094,13 @@ class MainWindow(QMainWindow):
                     seconds=30,
                     func=self._power_automation_tick,
                 )
+                self._last_power_tick_at = datetime.now() - timedelta(seconds=35)
+                self._schedule_next_wake_if_possible()
                 self._append_log("电源自动化调度已启用")
             else:
                 self.scheduler_service.remove_job("power_automation_tick")
+                self.power_service.cancel_wake_timer()
+                self._scheduled_wake_marker = ""
                 self._append_log("电源自动化调度已停用")
         except Exception:
             pass
@@ -1092,18 +1111,34 @@ class MainWindow(QMainWindow):
 
         settings = self._get_power_settings()
         now = datetime.now()
-        current_hhmm = now.strftime("%H:%M")
-        day_key = now.strftime("%Y-%m-%d")
+        window_start = self._last_power_tick_at or (now - timedelta(seconds=35))
+        self._last_power_tick_at = now
 
-        if self._freq_matches(settings.get("boot_frequency", "每天"), now) and current_hhmm == settings.get("boot_time"):
+        boot_hit, boot_target = self._time_hit_in_window(
+            settings.get("boot_frequency", "每天"),
+            settings.get("boot_time", "06:30"),
+            window_start,
+            now,
+        )
+        if boot_hit and boot_target is not None:
+            day_key = boot_target.strftime("%Y-%m-%d")
             if self._power_state.get("boot") != day_key:
                 self._power_state["boot"] = day_key
                 self._execute_boot_login(settings)
 
-        if self._freq_matches(settings.get("shutdown_frequency", "每天"), now) and current_hhmm == settings.get("shutdown_time"):
+        shutdown_hit, shutdown_target = self._time_hit_in_window(
+            settings.get("shutdown_frequency", "每天"),
+            settings.get("shutdown_time", "23:00"),
+            window_start,
+            now,
+        )
+        if shutdown_hit and shutdown_target is not None:
+            day_key = shutdown_target.strftime("%Y-%m-%d")
             if self._power_state.get("shutdown") != day_key:
                 self._power_state["shutdown"] = day_key
                 self._execute_shutdown_action(settings.get("shutdown_action", "关机"))
+
+        self._schedule_next_wake_if_possible(now=now)
 
     @staticmethod
     def _freq_matches(freq: str, now: datetime) -> bool:
@@ -1165,6 +1200,70 @@ class MainWindow(QMainWindow):
                 capture_output=True,
             )
         self._append_log("已尝试写入自动登录注册表（需管理员权限）")
+
+    @staticmethod
+    def _time_hit_in_window(freq: str, hhmm: str, window_start: datetime, window_end: datetime) -> tuple[bool, datetime | None]:
+        try:
+            target_time = datetime.strptime(hhmm.strip(), "%H:%M").time()
+        except ValueError:
+            return False, None
+
+        start = min(window_start, window_end)
+        end = max(window_start, window_end)
+        days = (end.date() - start.date()).days
+
+        for delta in range(days + 1):
+            day_dt = start + timedelta(days=delta)
+            candidate = datetime.combine(day_dt.date(), target_time)
+            if not (start < candidate <= end):
+                continue
+            if MainWindow._freq_matches(freq, candidate):
+                return True, candidate
+
+        return False, None
+
+    def _next_occurrence(self, freq: str, hhmm: str, now: datetime) -> datetime | None:
+        try:
+            target_time = datetime.strptime(hhmm.strip(), "%H:%M").time()
+        except ValueError:
+            return None
+
+        for offset in range(0, 8):
+            day = (now + timedelta(days=offset)).date()
+            candidate = datetime.combine(day, target_time)
+            if candidate <= now:
+                continue
+            if self._freq_matches(freq, candidate):
+                return candidate
+        return None
+
+    def _schedule_next_wake_if_possible(self, now: datetime | None = None) -> None:
+        if not self.config.get("power_enabled", False):
+            return
+
+        settings = self._get_power_settings()
+        now = now or datetime.now()
+        next_boot = self._next_occurrence(
+            settings.get("boot_frequency", "每天"),
+            settings.get("boot_time", "06:30"),
+            now,
+        )
+        if next_boot is None:
+            return
+
+        wake_target = next_boot - timedelta(minutes=1)
+        if wake_target <= now:
+            wake_target = now + timedelta(seconds=15)
+
+        marker = wake_target.strftime("%Y-%m-%d %H:%M")
+        if marker == self._scheduled_wake_marker:
+            return
+
+        if self.power_service.schedule_wake(wake_target):
+            self._scheduled_wake_marker = marker
+            self._append_log(f"已安排下一次系统唤醒：{wake_target.strftime('%Y-%m-%d %H:%M')}")
+        else:
+            self._append_log("系统唤醒定时器设置失败（可能缺少权限或系统策略不支持）")
 
     def _send_wol_packet(self, mac: str, host: str = "255.255.255.255", port: int = 9) -> None:
         cleaned = mac.replace(":", "").replace("-", "").strip()
