@@ -52,6 +52,9 @@ def default_config() -> dict[str, Any]:
             "wake_mode": "Windows任务计划",
             "wol_mac": "",
             "wol_host": "255.255.255.255",
+            "virtual_display_auto_prepare": False,
+            "virtual_display_auto_install": False,
+            "virtual_display_driver_inf": "",
         },
     }
 

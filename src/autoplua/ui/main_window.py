@@ -42,6 +42,7 @@ from autoplua.services.opencv_service import OpenCVFlowService
 from autoplua.services.power_service import PowerService
 from autoplua.services.process_service import ProcessService
 from autoplua.services.scheduler_service import SchedulerService
+from autoplua.services.virtual_display_service import VirtualDisplayService
 from autoplua.ui.program_config_dialog import ProgramConfigDialog
 from autoplua.ui.program_list_item import DailyLoopItemWidget
 from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         scheduler_service: SchedulerService,
         power_service: PowerService,
         opencv_flow_service: OpenCVFlowService,
+        virtual_display_service: VirtualDisplayService,
     ) -> None:
         super().__init__()
         self.logger = logger
@@ -67,6 +69,7 @@ class MainWindow(QMainWindow):
         self.scheduler_service = scheduler_service
         self.power_service = power_service
         self.opencv_flow_service = opencv_flow_service
+        self.virtual_display_service = virtual_display_service
 
         self.config = load_config()
         self.program_map: dict[str, ManagedProgram] = {}
@@ -286,6 +289,47 @@ class MainWindow(QMainWindow):
         row_pwd.addWidget(pwd_label)
         row_pwd.addWidget(self.login_password_input)
         panel_layout.addLayout(row_pwd)
+
+        v_title = QLabel("虚拟显示器（息屏识图）")
+        v_title.setStyleSheet("font-size: 17px; color: #222; font-weight: 700;")
+        panel_layout.addWidget(v_title)
+
+        self.virtual_display_auto_prepare_checkbox = QCheckBox("每次执行 OpenCV 前自动准备虚拟显示器")
+        self.virtual_display_auto_prepare_checkbox.setChecked(
+            bool(power_settings.get("virtual_display_auto_prepare", False))
+        )
+        self.virtual_display_auto_prepare_checkbox.toggled.connect(self._save_power_settings)
+        panel_layout.addWidget(self.virtual_display_auto_prepare_checkbox)
+
+        self.virtual_display_auto_install_checkbox = QCheckBox("若未检测到虚拟显示器则自动安装驱动（需管理员）")
+        self.virtual_display_auto_install_checkbox.setChecked(
+            bool(power_settings.get("virtual_display_auto_install", False))
+        )
+        self.virtual_display_auto_install_checkbox.toggled.connect(self._save_power_settings)
+        panel_layout.addWidget(self.virtual_display_auto_install_checkbox)
+
+        inf_row = QHBoxLayout()
+        inf_row.setSpacing(8)
+        inf_label = QLabel("驱动 INF")
+        inf_label.setStyleSheet("font-size: 15px; color: #222;")
+        self.virtual_display_inf_input = QLineEdit(power_settings.get("virtual_display_driver_inf", ""))
+        self.virtual_display_inf_input.setPlaceholderText("例如：D:/drivers/VirtualDisplay/iddsampledriver.inf")
+        self.virtual_display_inf_input.editingFinished.connect(self._save_power_settings)
+        inf_pick_btn = QPushButton("选择INF")
+        inf_pick_btn.setCursor(Qt.PointingHandCursor)
+        inf_pick_btn.clicked.connect(self._pick_virtual_display_inf)
+        inf_install_btn = QPushButton("安装并启用")
+        inf_install_btn.setCursor(Qt.PointingHandCursor)
+        inf_install_btn.clicked.connect(self._install_virtual_display_driver)
+        inf_test_btn = QPushButton("检测状态")
+        inf_test_btn.setCursor(Qt.PointingHandCursor)
+        inf_test_btn.clicked.connect(self._test_virtual_display_ready)
+        inf_row.addWidget(inf_label)
+        inf_row.addWidget(self.virtual_display_inf_input)
+        inf_row.addWidget(inf_pick_btn)
+        inf_row.addWidget(inf_install_btn)
+        inf_row.addWidget(inf_test_btn)
+        panel_layout.addLayout(inf_row)
 
         layout.addWidget(panel)
 
@@ -623,6 +667,8 @@ class MainWindow(QMainWindow):
             "command": filepath,
             "args": [],
             "launch_args_raw": "",
+            "input_mode": "foreground",
+            "target_window_title": "",
             "cwd": str(Path(filepath).parent),
             "enabled": True,
             "start_time": "00:00",
@@ -663,6 +709,8 @@ class MainWindow(QMainWindow):
 
         entry["launch_args_raw"] = dialog.result_data.get("launch_args_raw", "")
         entry["args"] = dialog.result_data.get("args", [])
+        entry["input_mode"] = dialog.result_data.get("input_mode", "foreground")
+        entry["target_window_title"] = dialog.result_data.get("target_window_title", "")
         time_points = dialog.result_data.get("time_points", [])
         if isinstance(time_points, list) and time_points:
             entry["time_points"] = time_points
@@ -698,6 +746,8 @@ class MainWindow(QMainWindow):
                 "command": command,
                 "args": raw.get("args", []),
                 "launch_args_raw": raw.get("launch_args_raw", ""),
+                "input_mode": raw.get("input_mode", "background_window_message"),
+                "target_window_title": raw.get("target_window_title", Path(name).stem),
                 "cwd": raw.get("cwd") or (str(Path(command).parent) if command else ""),
                 "enabled": bool(raw.get("enabled", True)),
                 "start_time": raw.get("start_time", "00:00"),
@@ -708,6 +758,7 @@ class MainWindow(QMainWindow):
             self.program_entries.append(entry)
 
         self._refresh_program_list()
+        self._save_programs_to_config()
 
     def _refresh_program_list(self) -> None:
         self.loop_list.clear()
@@ -881,6 +932,8 @@ class MainWindow(QMainWindow):
         if launch_args:
             self._append_log(f"{program_name} 使用启动参数：{' '.join(launch_args)}")
 
+        self._prepare_virtual_display_for_flow(program_name)
+
         flow = entry.get("opencv_flow", {})
         if not isinstance(flow, dict) or not flow.get("nodes"):
             self._append_log(f"{program_name} 未配置 OpenCV 流程")
@@ -895,6 +948,10 @@ class MainWindow(QMainWindow):
             default_wait_seconds=2,
             startup_wait_seconds=3,
             step_retry_seconds=20,
+            execution_options={
+                "input_mode": entry.get("input_mode", "foreground"),
+                "target_window_title": entry.get("target_window_title", ""),
+            },
         )
         if success:
             self._append_log(f"{program_name} OpenCV 流程执行完成")
@@ -903,6 +960,40 @@ class MainWindow(QMainWindow):
         if message == "missing-dependency-pyautogui":
             self._append_log(
                 f"{program_name} OpenCV 流程失败：缺少依赖 pyautogui，请执行 pip install pyautogui"
+            )
+            return
+
+        if message == "screen-capture-unavailable-possibly-screen-off-or-locked":
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：当前截图源不可用（常见于息屏/锁屏）。"
+                "请接入虚拟显示器驱动，或保持目标桌面持续渲染。"
+            )
+            return
+
+        if message == "target-window-not-found":
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：未找到目标窗口标题。"
+                "请在程序配置中填写与系统窗口标题完全一致的文本。"
+            )
+            return
+
+        if message.startswith("template-image-not-found:"):
+            missing = message.split(":", 1)[1]
+            self._append_log(f"{program_name} OpenCV 流程失败：模板图片不存在 -> {missing}")
+            return
+
+        if message.endswith("click-target-not-found"):
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：未识别到点击目标。"
+                "请确认目标窗口标题、模板图片路径、以及虚拟显示器是否已启用扩展显示。"
+            )
+            return
+
+        if "click-target-not-found-score-" in message:
+            score = message.split("click-target-not-found-score-", 1)[1]
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：未识别到点击目标（最高相似度={score}）。"
+                "请重截模板，或在节点参数中设置 threshold(如 0.68)。"
             )
             return
 
@@ -1060,6 +1151,9 @@ class MainWindow(QMainWindow):
             "wake_mode": "Windows任务计划",
             "wol_mac": "",
             "wol_host": "255.255.255.255",
+            "virtual_display_auto_prepare": False,
+            "virtual_display_auto_install": False,
+            "virtual_display_driver_inf": "",
         }
         return {**defaults, **raw}
 
@@ -1080,6 +1174,9 @@ class MainWindow(QMainWindow):
             "shutdown_action": self.shutdown_action_combo.currentText(),
             "login_user": self.login_user_input.text().strip(),
             "login_password": self.login_password_input.text(),
+            "virtual_display_auto_prepare": bool(self.virtual_display_auto_prepare_checkbox.isChecked()),
+            "virtual_display_auto_install": bool(self.virtual_display_auto_install_checkbox.isChecked()),
+            "virtual_display_driver_inf": self.virtual_display_inf_input.text().strip(),
         }
         self.config["power_settings"] = settings
         save_config(self.config)
@@ -1285,4 +1382,71 @@ class MainWindow(QMainWindow):
         self._save_power_settings()
         settings = self._get_power_settings()
         self._send_wol_packet(settings.get("wol_mac", ""), settings.get("wol_host", "255.255.255.255"))
+
+    def _pick_virtual_display_inf(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择虚拟显示器驱动 INF",
+            "",
+            "INF Files (*.inf);;All Files (*)",
+        )
+        if not path:
+            return
+        self.virtual_display_inf_input.setText(path)
+        self._save_power_settings()
+
+    def _install_virtual_display_driver(self) -> None:
+        self._save_power_settings()
+        settings = self._get_power_settings()
+        inf = settings.get("virtual_display_driver_inf", "")
+        ok, message = self.virtual_display_service.install_driver_from_inf(inf)
+        if not ok:
+            if message == "admin-required":
+                self._append_log("虚拟显示器安装失败：需要管理员权限运行 AutoPlua。")
+            elif message == "invalid-inf-path":
+                self._append_log("虚拟显示器安装失败：INF 路径无效。")
+            else:
+                self._append_log(f"虚拟显示器安装失败：{message}")
+            return
+
+        ok_extend, msg_extend = self.virtual_display_service.enable_extend_mode()
+        if ok_extend:
+            self._append_log("虚拟显示器驱动安装成功，已切换为扩展显示模式。")
+            return
+        self._append_log(f"虚拟显示器驱动已安装，但扩展显示失败：{msg_extend}")
+
+    def _test_virtual_display_ready(self) -> None:
+        present = self.virtual_display_service.is_virtual_display_present()
+        if present:
+            ok_extend, msg = self.virtual_display_service.enable_extend_mode()
+            if ok_extend:
+                self._append_log("虚拟显示器检测通过，扩展显示已启用。")
+            else:
+                self._append_log(f"检测到虚拟显示器，但扩展显示启用失败：{msg}")
+        else:
+            self._append_log("未检测到虚拟显示器。可先选择 INF 后点击“安装并启用”。")
+
+    def _prepare_virtual_display_for_flow(self, program_name: str) -> None:
+        settings = self._get_power_settings()
+        if not bool(settings.get("virtual_display_auto_prepare", False)):
+            return
+
+        inf = str(settings.get("virtual_display_driver_inf", "")).strip()
+        auto_install = bool(settings.get("virtual_display_auto_install", False))
+        ok, message = self.virtual_display_service.auto_prepare(inf_path=inf, auto_install=auto_install)
+        if ok:
+            if message == "installed-and-ready":
+                self._append_log(f"{program_name} 已自动安装并启用虚拟显示器。")
+            else:
+                self._append_log(f"{program_name} 虚拟显示器就绪。")
+            return
+
+        if message == "virtual-display-not-present":
+            self._append_log(
+                f"{program_name} 未检测到虚拟显示器，且未开启自动安装。"
+                "如需息屏识图，请在电源页配置 INF 并开启自动安装。"
+            )
+            return
+
+        self._append_log(f"{program_name} 虚拟显示器准备失败：{message}")
 

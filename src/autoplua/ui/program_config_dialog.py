@@ -5,6 +5,7 @@ import shlex
 from PySide6.QtCore import Qt, QTime
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -100,6 +101,33 @@ class ProgramConfigDialog(QDialog):
         args_tip = QLabel("若填写启动参数，可直接一步完成启动；OpenCV 流程作为兜底配置使用。")
         args_tip.setStyleSheet("font-size: 14px; color: #4b5563;")
         args_layout.addWidget(args_tip)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        mode_label = QLabel("输入模式")
+        mode_label.setStyleSheet("font-size: 14px; color: #334155;")
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.addItem("前台模拟（兼容高，会占用鼠标键盘）", "foreground")
+        self.input_mode_combo.addItem("后台窗口消息（不抢鼠标键盘）", "background_window_message")
+
+        saved_mode = str(self.entry.get("input_mode", "foreground")).strip() or "foreground"
+        idx = self.input_mode_combo.findData(saved_mode)
+        self.input_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        mode_row.addWidget(mode_label)
+        mode_row.addWidget(self.input_mode_combo)
+        mode_row.addStretch()
+        args_layout.addLayout(mode_row)
+
+        target_row = QHBoxLayout()
+        target_row.setSpacing(8)
+        target_label = QLabel("目标窗口标题")
+        target_label.setStyleSheet("font-size: 14px; color: #334155;")
+        self.target_window_input = QLineEdit(self.entry.get("target_window_title", ""))
+        self.target_window_input.setPlaceholderText("仅后台窗口消息模式必填，例如：碧蓝航线")
+        target_row.addWidget(target_label)
+        target_row.addWidget(self.target_window_input)
+        args_layout.addLayout(target_row)
         root.addWidget(args_frame)
 
         module_box = QFrame()
@@ -221,6 +249,12 @@ class ProgramConfigDialog(QDialog):
                 QMessageBox.warning(self, "参数错误", f"启动参数解析失败：{exc}")
                 return
 
+        input_mode = str(self.input_mode_combo.currentData())
+        target_window_title = self.target_window_input.text().strip()
+        if input_mode == "background_window_message" and not target_window_title:
+            QMessageBox.warning(self, "配置不完整", "后台窗口消息模式需要填写目标窗口标题。")
+            return
+
         flow = self.canvas.to_payload()
         has_flow = bool(flow.get("nodes"))
         if not launch_args_raw and not has_flow:
@@ -240,6 +274,8 @@ class ProgramConfigDialog(QDialog):
         self.result_data = {
             "launch_args_raw": launch_args_raw,
             "args": parsed_args,
+            "input_mode": input_mode,
+            "target_window_title": target_window_title,
             "opencv_flow": flow,
             "time_points": self._collect_time_points(),
         }

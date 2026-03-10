@@ -13,6 +13,7 @@ from autoplua.services.power_service import PowerService
 from autoplua.services.opencv_service import OpenCVFlowService
 from autoplua.services.process_service import ProcessService
 from autoplua.services.scheduler_service import SchedulerService
+from autoplua.services.virtual_display_service import VirtualDisplayService
 from autoplua.ui.main_window import MainWindow
 
 
@@ -24,6 +25,7 @@ def run() -> int:
     scheduler_service = SchedulerService()
     power_service = PowerService()
     opencv_flow_service = OpenCVFlowService()
+    virtual_display_service = VirtualDisplayService()
 
     scheduler_service.start()
 
@@ -33,6 +35,7 @@ def run() -> int:
         scheduler_service=scheduler_service,
         power_service=power_service,
         opencv_flow_service=opencv_flow_service,
+        virtual_display_service=virtual_display_service,
     )
     window.show()
 
