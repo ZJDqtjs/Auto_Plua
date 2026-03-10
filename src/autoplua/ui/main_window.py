@@ -669,6 +669,7 @@ class MainWindow(QMainWindow):
             "launch_args_raw": "",
             "input_mode": "foreground",
             "target_window_title": "",
+            "opencv_step_retry_seconds": 30,
             "cwd": str(Path(filepath).parent),
             "enabled": True,
             "start_time": "00:00",
@@ -711,6 +712,7 @@ class MainWindow(QMainWindow):
         entry["args"] = dialog.result_data.get("args", [])
         entry["input_mode"] = dialog.result_data.get("input_mode", "foreground")
         entry["target_window_title"] = dialog.result_data.get("target_window_title", "")
+        entry["opencv_step_retry_seconds"] = int(dialog.result_data.get("opencv_step_retry_seconds", 30))
         time_points = dialog.result_data.get("time_points", [])
         if isinstance(time_points, list) and time_points:
             entry["time_points"] = time_points
@@ -748,6 +750,7 @@ class MainWindow(QMainWindow):
                 "launch_args_raw": raw.get("launch_args_raw", ""),
                 "input_mode": raw.get("input_mode", "background_window_message"),
                 "target_window_title": raw.get("target_window_title", Path(name).stem),
+                "opencv_step_retry_seconds": int(raw.get("opencv_step_retry_seconds", 30) or 30),
                 "cwd": raw.get("cwd") or (str(Path(command).parent) if command else ""),
                 "enabled": bool(raw.get("enabled", True)),
                 "start_time": raw.get("start_time", "00:00"),
@@ -947,14 +950,19 @@ class MainWindow(QMainWindow):
             timeout_seconds=180,
             default_wait_seconds=2,
             startup_wait_seconds=3,
-            step_retry_seconds=20,
+            step_retry_seconds=max(5, int(entry.get("opencv_step_retry_seconds", 30) or 30)),
             execution_options={
                 "input_mode": entry.get("input_mode", "foreground"),
                 "target_window_title": entry.get("target_window_title", ""),
+                "target_pid": self.process_service.get_running_pid(program_name),
+                "target_process_name": program_name,
             },
         )
         if success:
-            self._append_log(f"{program_name} OpenCV 流程执行完成")
+            if message != "ok":
+                self._append_log(f"{program_name} OpenCV 流程执行完成：{message}")
+            else:
+                self._append_log(f"{program_name} OpenCV 流程执行完成")
             return
 
         if message == "missing-dependency-pyautogui":
@@ -993,7 +1001,21 @@ class MainWindow(QMainWindow):
             score = message.split("click-target-not-found-score-", 1)[1]
             self._append_log(
                 f"{program_name} OpenCV 流程失败：未识别到点击目标（最高相似度={score}）。"
-                "请重截模板，或在节点参数中设置 threshold(如 0.68)。"
+                "后台模式下建议模板相似度至少 0.80；请重截模板并确保窗口状态一致。"
+            )
+            return
+
+        if message == "background-target-window-not-found":
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：后台目标窗口未找到。"
+                "请确认窗口标题，或等待程序主窗口完全创建后再执行。"
+            )
+            return
+
+        if "source=window-minimized" in message or "window-minimized" in message:
+            self._append_log(
+                f"{program_name} OpenCV 流程失败：目标窗口处于最小化状态，后台截图不可用。"
+                "请保持窗口非最小化（可被遮挡/切到后台），或放到虚拟显示器上运行。"
             )
             return
 

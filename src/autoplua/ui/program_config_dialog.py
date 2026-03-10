@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTimeEdit,
     QVBoxLayout,
 )
@@ -101,6 +102,19 @@ class ProgramConfigDialog(QDialog):
         args_tip = QLabel("若填写启动参数，可直接一步完成启动；OpenCV 流程作为兜底配置使用。")
         args_tip.setStyleSheet("font-size: 14px; color: #4b5563;")
         args_layout.addWidget(args_tip)
+
+        retry_row = QHBoxLayout()
+        retry_row.setSpacing(8)
+        retry_label = QLabel("步骤识别超时(秒)")
+        retry_label.setStyleSheet("font-size: 14px; color: #334155;")
+        self.step_retry_seconds_spin = QSpinBox()
+        self.step_retry_seconds_spin.setRange(5, 120)
+        self.step_retry_seconds_spin.setSingleStep(5)
+        self.step_retry_seconds_spin.setValue(int(self.entry.get("opencv_step_retry_seconds", 30) or 30))
+        retry_row.addWidget(retry_label)
+        retry_row.addWidget(self.step_retry_seconds_spin)
+        retry_row.addStretch()
+        args_layout.addLayout(retry_row)
 
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
@@ -276,6 +290,7 @@ class ProgramConfigDialog(QDialog):
             "args": parsed_args,
             "input_mode": input_mode,
             "target_window_title": target_window_title,
+            "opencv_step_retry_seconds": int(self.step_retry_seconds_spin.value()),
             "opencv_flow": flow,
             "time_points": self._collect_time_points(),
         }

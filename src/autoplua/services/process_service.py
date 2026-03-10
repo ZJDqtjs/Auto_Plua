@@ -102,6 +102,22 @@ class ProcessService:
                 continue
         return False
 
+    def get_running_pid(self, program_name: str) -> int | None:
+        process = self._children.get(program_name)
+        if process and process.poll() is None:
+            return int(process.pid)
+
+        target = program_name.lower()
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+                if target in name or target in cmdline:
+                    return int(proc.info.get("pid") or 0)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return None
+
     @staticmethod
     def parse_command(raw: str) -> tuple[str, list[str]]:
         parts = shlex.split(raw)
