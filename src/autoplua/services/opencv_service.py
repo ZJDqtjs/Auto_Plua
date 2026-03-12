@@ -109,11 +109,19 @@ class OpenCVFlowService:
 
         action_details: list[str] = []
 
-        started_at = time.monotonic()
+        start_params = self._node_params(nodes_chain[0])
+        startup_timeout_seconds = self._read_positive_int(
+            start_params.get("startup_timeout_seconds"),
+            default=step_retry_seconds,
+            minimum=1,
+        )
+        next_step_delay_seconds = self._read_positive_int(
+            start_params.get("next_step_delay_seconds"),
+            default=startup_wait_seconds,
+            minimum=0,
+        )
 
-        if str(nodes_chain[0].get("module", "")) == "start" and startup_wait_seconds > 0:
-            if not self._safe_sleep(startup_wait_seconds, started_at, timeout_seconds):
-                return False, f"timeout-{timeout_seconds}s"
+        started_at = time.monotonic()
 
         for index in range(1, len(nodes_chain)):
             now = time.monotonic()
@@ -124,7 +132,9 @@ class OpenCVFlowService:
             module = str(node.get("module", ""))
             prev_module = str(nodes_chain[index - 1].get("module", "")) if index > 0 else ""
 
-            pre_click_delay_seconds = 1 if prev_module == "start" and module in CLICK_MODULES else 0
+            pre_click_delay_seconds = 0
+            if prev_module == "start" and module in CLICK_MODULES:
+                pre_click_delay_seconds = next_step_delay_seconds
 
             if module == "wait":
                 ok, message = self._execute_node(
@@ -136,11 +146,12 @@ class OpenCVFlowService:
                     pre_click_delay_seconds=pre_click_delay_seconds,
                 )
             else:
+                retry_window = startup_timeout_seconds if index == 1 else step_retry_seconds
                 ok, message = self._execute_node_with_retry(
                     node=node,
                     started_at=started_at,
                     timeout_seconds=timeout_seconds,
-                    step_retry_seconds=step_retry_seconds,
+                    step_retry_seconds=retry_window,
                     input_mode=input_mode,
                     target_window_title=target_window_title,
                     pre_click_delay_seconds=pre_click_delay_seconds,
@@ -207,6 +218,19 @@ class OpenCVFlowService:
         ) or message in {
             "empty-text",
         }
+
+    @staticmethod
+    def _node_params(node: dict[str, Any]) -> dict[str, Any]:
+        params = node.get("params", {}) if isinstance(node, dict) else {}
+        return params if isinstance(params, dict) else {}
+
+    @staticmethod
+    def _read_positive_int(raw: Any, default: int, minimum: int = 0) -> int:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
 
     def _execute_node(
         self,

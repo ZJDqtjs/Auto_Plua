@@ -1,0 +1,4 @@
+Source: https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/tag/25.7.23
+Downloaded asset: VirtualDisplayDriver-x86.Driver.Only.zip
+Downloaded on: 2026-03-10
+Notes: Contains MttVDD.inf and related catalog/binary files for manual/embedded installation.

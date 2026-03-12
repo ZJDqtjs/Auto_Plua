@@ -192,6 +192,11 @@
     "shutdown_time": "01:00",
     "shutdown_action": "睡眠",
     "login_user": "3528137639@qq.com",
-    "login_password": "24751"
+    "login_password": "24751",
+    "virtual_display_auto_prepare": false,
+    "virtual_display_auto_install": false,
+    "virtual_display_prepare_on_app_start": true,
+    "virtual_display_strict_isolation": true,
+    "virtual_display_driver_inf": ""
   }
 }

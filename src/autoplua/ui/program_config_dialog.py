@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTimeEdit,
     QVBoxLayout,
 )
@@ -103,19 +102,6 @@ class ProgramConfigDialog(QDialog):
         args_tip.setStyleSheet("font-size: 14px; color: #4b5563;")
         args_layout.addWidget(args_tip)
 
-        retry_row = QHBoxLayout()
-        retry_row.setSpacing(8)
-        retry_label = QLabel("步骤识别超时(秒)")
-        retry_label.setStyleSheet("font-size: 14px; color: #334155;")
-        self.step_retry_seconds_spin = QSpinBox()
-        self.step_retry_seconds_spin.setRange(5, 120)
-        self.step_retry_seconds_spin.setSingleStep(5)
-        self.step_retry_seconds_spin.setValue(int(self.entry.get("opencv_step_retry_seconds", 30) or 30))
-        retry_row.addWidget(retry_label)
-        retry_row.addWidget(self.step_retry_seconds_spin)
-        retry_row.addStretch()
-        args_layout.addLayout(retry_row)
-
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
         mode_label = QLabel("输入模式")
@@ -199,7 +185,7 @@ class ProgramConfigDialog(QDialog):
 
         guide = QLabel(
             "拖拽上方模块到下方画布，打开【连线模式】后按顺序点击两个模块可连线。"
-            "双击模块可配置参数（点击支持图片识别或手动坐标，支持 Ctrl+V 粘贴截图并在模块下方预览；无等待模块时默认步骤间隔 1 秒）。"
+            "双击模块可配置参数（点击支持图片识别或手动坐标，支持 Ctrl+V 粘贴截图并在模块下方预览；无等待模块时默认步骤间隔 2 秒）。"
         )
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size: 14px; color: #4b5563;")
@@ -215,6 +201,7 @@ class ProgramConfigDialog(QDialog):
         flow_payload = self.entry.get("opencv_flow", {})
         if isinstance(flow_payload, dict):
             self.canvas.load_payload(flow_payload)
+        self._migrate_legacy_step_timeout_to_start_node()
 
     def _toggle_connect_mode(self, enabled: bool) -> None:
         self.canvas.set_connect_mode(enabled)
@@ -285,16 +272,48 @@ class ProgramConfigDialog(QDialog):
                 QMessageBox.warning(self, "模块参数不完整", node_error)
                 return
 
+        startup_timeout_seconds = self._extract_startup_timeout(flow)
+
         self.result_data = {
             "launch_args_raw": launch_args_raw,
             "args": parsed_args,
             "input_mode": input_mode,
             "target_window_title": target_window_title,
-            "opencv_step_retry_seconds": int(self.step_retry_seconds_spin.value()),
+            # Keep legacy key for compatibility; source now comes from start-node config.
+            "opencv_step_retry_seconds": startup_timeout_seconds,
             "opencv_flow": flow,
             "time_points": self._collect_time_points(),
         }
         self.accept()
+
+    def _migrate_legacy_step_timeout_to_start_node(self) -> None:
+        legacy_timeout = int(self.entry.get("opencv_step_retry_seconds", 30) or 30)
+        legacy_timeout = max(5, legacy_timeout)
+
+        for node_id, node in self.canvas.nodes.items():
+            if node.module_type != "start":
+                continue
+            params = dict(node.params)
+            params.setdefault("startup_timeout_seconds", legacy_timeout)
+            params.setdefault("next_step_delay_seconds", 3)
+            self.canvas.set_node_params(node_id, params)
+            break
+
+    @staticmethod
+    def _extract_startup_timeout(flow: dict) -> int:
+        default_timeout = 30
+        nodes = flow.get("nodes", []) if isinstance(flow, dict) else []
+        if not isinstance(nodes, list):
+            return default_timeout
+        for node in nodes:
+            if not isinstance(node, dict) or str(node.get("module", "")) != "start":
+                continue
+            params = node.get("params", {}) if isinstance(node.get("params", {}), dict) else {}
+            try:
+                return max(5, int(params.get("startup_timeout_seconds", default_timeout)))
+            except (TypeError, ValueError):
+                return default_timeout
+        return default_timeout
 
     def _load_initial_time_rows(self) -> None:
         time_points = self.entry.get("time_points", [])

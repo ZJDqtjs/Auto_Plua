@@ -33,7 +33,7 @@ FLOW_MODULE_TITLES = {
 }
 
 CLICK_MODULES = {"left_click", "right_click"}
-NO_CONFIG_MODULES = {"start", "end", "enter"}
+NO_CONFIG_MODULES = {"end", "enter"}
 
 
 def _template_image_dir() -> Path:
@@ -135,7 +135,9 @@ class FlowNodeWidget(QFrame):
         self._drag_origin = QPoint()
         self._selected = False
 
-        if self.module_type in {"start", "end"}:
+        if self.module_type == "start":
+            self.setFixedSize(136, 88)
+        elif self.module_type == "end":
             self.setFixedSize(124, 74)
         elif self.module_type == "enter":
             self.setFixedSize(124, 82)
@@ -230,6 +232,8 @@ class FlowNodeWidget(QFrame):
 
     def _is_configured(self) -> bool:
         if self.module_type in NO_CONFIG_MODULES:
+            return True
+        if self.module_type == "start":
             return True
         if self.module_type in CLICK_MODULES:
             image_path = normalize_image_path(str(self.params.get("image_path", "")))
@@ -623,7 +627,19 @@ class NodeParamDialog(QDialog):
         self.text_input = QLineEdit(self.initial.get("text", ""))
         self.text_input.setPlaceholderText("需要输入的文本")
 
-        if module_type in CLICK_MODULES:
+        self.start_timeout_input = QSpinBox()
+        self.start_timeout_input.setRange(1, 300)
+        self.start_timeout_input.setValue(int(self.initial.get("startup_timeout_seconds", 20)))
+
+        self.start_next_delay_input = QSpinBox()
+        self.start_next_delay_input.setRange(0, 30)
+        self.start_next_delay_input.setValue(int(self.initial.get("next_step_delay_seconds", 3)))
+
+        if module_type == "start":
+            # Ordered top-to-bottom as requested.
+            form.addRow("启动最大超时(秒)", self.start_timeout_input)
+            form.addRow("下一模块延迟点击(秒)", self.start_next_delay_input)
+        elif module_type in CLICK_MODULES:
             form.addRow("识图图片", image_row)
             form.addRow("手动 X 坐标", self.x_input)
             form.addRow("手动 Y 坐标", self.y_input)
@@ -672,6 +688,11 @@ class NodeParamDialog(QDialog):
         self.image_input.setText(normalize_image_path(image_path))
 
     def get_data(self) -> dict:
+        if self.module_type == "start":
+            return {
+                "startup_timeout_seconds": self.start_timeout_input.value(),
+                "next_step_delay_seconds": self.start_next_delay_input.value(),
+            }
         if self.module_type in CLICK_MODULES:
             return {
                 "image_path": normalize_image_path(self.image_input.text()),

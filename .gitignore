@@ -1,5 +1,5 @@
 
 /.venv/
-/template_image
+#/template_image
 __pycache__/
 *.pyc

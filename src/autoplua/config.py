@@ -54,6 +54,8 @@ def default_config() -> dict[str, Any]:
             "wol_host": "255.255.255.255",
             "virtual_display_auto_prepare": False,
             "virtual_display_auto_install": False,
+            "virtual_display_prepare_on_app_start": True,
+            "virtual_display_strict_isolation": True,
             "virtual_display_driver_inf": "",
         },
     }

@@ -171,6 +171,7 @@ class MainWindow(QMainWindow):
         self.stacked_widget.setCurrentIndex(0)
         self._load_programs_from_config()
         self._position_start_add_button()
+        QTimer.singleShot(1000, self._bootstrap_virtual_display_on_app_start)
 
     def _build_power_page(self) -> QWidget:
         self.power_stack = QStackedWidget()
@@ -308,12 +309,26 @@ class MainWindow(QMainWindow):
         self.virtual_display_auto_install_checkbox.toggled.connect(self._save_power_settings)
         panel_layout.addWidget(self.virtual_display_auto_install_checkbox)
 
+        self.virtual_display_prepare_on_start_checkbox = QCheckBox("启动 AutoPlua 时自动准备虚拟显示器")
+        self.virtual_display_prepare_on_start_checkbox.setChecked(
+            bool(power_settings.get("virtual_display_prepare_on_app_start", True))
+        )
+        self.virtual_display_prepare_on_start_checkbox.toggled.connect(self._save_power_settings)
+        panel_layout.addWidget(self.virtual_display_prepare_on_start_checkbox)
+
+        self.virtual_display_strict_isolation_checkbox = QCheckBox("强制在非主显示器执行自动化（失败则中止）")
+        self.virtual_display_strict_isolation_checkbox.setChecked(
+            bool(power_settings.get("virtual_display_strict_isolation", True))
+        )
+        self.virtual_display_strict_isolation_checkbox.toggled.connect(self._save_power_settings)
+        panel_layout.addWidget(self.virtual_display_strict_isolation_checkbox)
+
         inf_row = QHBoxLayout()
         inf_row.setSpacing(8)
         inf_label = QLabel("驱动 INF")
         inf_label.setStyleSheet("font-size: 15px; color: #222;")
         self.virtual_display_inf_input = QLineEdit(power_settings.get("virtual_display_driver_inf", ""))
-        self.virtual_display_inf_input.setPlaceholderText("例如：D:/drivers/VirtualDisplay/iddsampledriver.inf")
+        self.virtual_display_inf_input.setPlaceholderText("可留空使用项目内置驱动；也可手动指定 INF 覆盖")
         self.virtual_display_inf_input.editingFinished.connect(self._save_power_settings)
         inf_pick_btn = QPushButton("选择INF")
         inf_pick_btn.setCursor(Qt.PointingHandCursor)
@@ -935,7 +950,8 @@ class MainWindow(QMainWindow):
         if launch_args:
             self._append_log(f"{program_name} 使用启动参数：{' '.join(launch_args)}")
 
-        self._prepare_virtual_display_for_flow(program_name)
+        if not self._prepare_virtual_display_for_flow(program_name):
+            return
 
         flow = entry.get("opencv_flow", {})
         if not isinstance(flow, dict) or not flow.get("nodes"):
@@ -945,6 +961,15 @@ class MainWindow(QMainWindow):
         nodes_count = len(flow.get("nodes", [])) if isinstance(flow.get("nodes", []), list) else 0
         self._append_log(f"{program_name} 开始执行 OpenCV 流程，节点数：{nodes_count}")
 
+        input_mode = str(entry.get("input_mode", "foreground")).strip() or "foreground"
+        settings = self._get_power_settings()
+        strict_isolation = bool(settings.get("virtual_display_strict_isolation", True))
+        if strict_isolation and input_mode != "background_window_message":
+            input_mode = "background_window_message"
+            self._append_log(
+                f"{program_name} 已启用强制隔离执行，输入模式自动切换为后台窗口消息。"
+            )
+
         success, message = self.opencv_flow_service.run_flow(
             flow,
             timeout_seconds=180,
@@ -952,7 +977,7 @@ class MainWindow(QMainWindow):
             startup_wait_seconds=3,
             step_retry_seconds=max(5, int(entry.get("opencv_step_retry_seconds", 30) or 30)),
             execution_options={
-                "input_mode": entry.get("input_mode", "foreground"),
+                "input_mode": input_mode,
                 "target_window_title": entry.get("target_window_title", ""),
                 "target_pid": self.process_service.get_running_pid(program_name),
                 "target_process_name": program_name,
@@ -1175,6 +1200,8 @@ class MainWindow(QMainWindow):
             "wol_host": "255.255.255.255",
             "virtual_display_auto_prepare": False,
             "virtual_display_auto_install": False,
+            "virtual_display_prepare_on_app_start": True,
+            "virtual_display_strict_isolation": True,
             "virtual_display_driver_inf": "",
         }
         return {**defaults, **raw}
@@ -1198,6 +1225,8 @@ class MainWindow(QMainWindow):
             "login_password": self.login_password_input.text(),
             "virtual_display_auto_prepare": bool(self.virtual_display_auto_prepare_checkbox.isChecked()),
             "virtual_display_auto_install": bool(self.virtual_display_auto_install_checkbox.isChecked()),
+            "virtual_display_prepare_on_app_start": bool(self.virtual_display_prepare_on_start_checkbox.isChecked()),
+            "virtual_display_strict_isolation": bool(self.virtual_display_strict_isolation_checkbox.isChecked()),
             "virtual_display_driver_inf": self.virtual_display_inf_input.text().strip(),
         }
         self.config["power_settings"] = settings
@@ -1427,48 +1456,135 @@ class MainWindow(QMainWindow):
                 self._append_log("虚拟显示器安装失败：需要管理员权限运行 AutoPlua。")
             elif message == "invalid-inf-path":
                 self._append_log("虚拟显示器安装失败：INF 路径无效。")
+            elif message == "embedded-driver-not-found":
+                self._append_log(
+                    "虚拟显示器安装失败：未找到项目内置驱动。"
+                    "请将驱动 INF 放到 drivers/virtual_display 目录，或手动选择 INF。"
+                )
             else:
                 self._append_log(f"虚拟显示器安装失败：{message}")
             return
 
         ok_extend, msg_extend = self.virtual_display_service.enable_extend_mode()
-        if ok_extend:
+        if ok_extend and self.virtual_display_service.ensure_automation_display_ready(
+            inf_path=str(inf),
+            auto_install=False,
+            wait_seconds=6.0,
+        )[0]:
             self._append_log("虚拟显示器驱动安装成功，已切换为扩展显示模式。")
             return
+
+        _, ready_msg = self.virtual_display_service.ensure_automation_display_ready(
+            inf_path=str(inf),
+            auto_install=False,
+            wait_seconds=1.0,
+        )
+        if ready_msg == "virtual-device-instance-missing":
+            self._append_log(
+                "虚拟显示器驱动包已进入系统，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
+                "这通常由其他虚拟显示驱动冲突导致，或需使用驱动自带控制器创建实例。"
+            )
+            return
+
+        if ok_extend:
+            self._append_log(
+                "虚拟显示器驱动已安装，但当前仍未激活为非主显示器。"
+                "请打开系统显示设置确认‘扩展这些显示器’，或重启后再试。"
+            )
+            return
+
         self._append_log(f"虚拟显示器驱动已安装，但扩展显示失败：{msg_extend}")
 
     def _test_virtual_display_ready(self) -> None:
-        present = self.virtual_display_service.is_virtual_display_present()
-        if present:
+        settings = self._get_power_settings()
+        inf = str(settings.get("virtual_display_driver_inf", "")).strip()
+        active = self.virtual_display_service.has_non_primary_monitor()
+        installed = self.virtual_display_service.is_virtual_display_driver_installed(inf_path=inf)
+        staged = self.virtual_display_service.is_driver_package_staged(inf_path=inf)
+        device_present = self.virtual_display_service.is_target_display_device_present()
+
+        if active:
             ok_extend, msg = self.virtual_display_service.enable_extend_mode()
             if ok_extend:
                 self._append_log("虚拟显示器检测通过，扩展显示已启用。")
             else:
                 self._append_log(f"检测到虚拟显示器，但扩展显示启用失败：{msg}")
+        elif staged and not device_present:
+            self._append_log(
+                "已检测到目标驱动包，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
+                "请先停用其他虚拟显示驱动（如 Parsec/Oray/GameViewer）后重试安装。"
+            )
+        elif installed:
+            self._append_log(
+                "已检测到虚拟显示驱动已安装，但当前未激活为非主显示器。"
+                "可点击“安装并启用”或检查系统显示设置为扩展模式。"
+            )
         else:
             self._append_log("未检测到虚拟显示器。可先选择 INF 后点击“安装并启用”。")
 
-    def _prepare_virtual_display_for_flow(self, program_name: str) -> None:
+    def _prepare_virtual_display_for_flow(self, program_name: str) -> bool:
         settings = self._get_power_settings()
+        strict_isolation = bool(settings.get("virtual_display_strict_isolation", True))
         if not bool(settings.get("virtual_display_auto_prepare", False)):
-            return
+            if strict_isolation and not self.virtual_display_service.has_non_primary_monitor():
+                self._append_log(
+                    f"{program_name} 已开启强制隔离，但当前无可用非主显示器。"
+                    "请开启“执行前自动准备虚拟显示器”或手动接入虚拟显示器后再运行。"
+                )
+                return False
+            return True
 
         inf = str(settings.get("virtual_display_driver_inf", "")).strip()
         auto_install = bool(settings.get("virtual_display_auto_install", False))
-        ok, message = self.virtual_display_service.auto_prepare(inf_path=inf, auto_install=auto_install)
+        ok, message = self.virtual_display_service.ensure_automation_display_ready(
+            inf_path=inf,
+            auto_install=auto_install,
+        )
         if ok:
             if message == "installed-and-ready":
                 self._append_log(f"{program_name} 已自动安装并启用虚拟显示器。")
             else:
                 self._append_log(f"{program_name} 虚拟显示器就绪。")
-            return
+            return True
 
         if message == "virtual-display-not-present":
             self._append_log(
                 f"{program_name} 未检测到虚拟显示器，且未开启自动安装。"
-                "如需息屏识图，请在电源页配置 INF 并开启自动安装。"
+                "如需息屏识图，请开启自动安装；INF 可留空使用项目内置驱动。"
+            )
+            return not strict_isolation
+
+        if message == "virtual-display-present-but-not-extended":
+            self._append_log(
+                f"{program_name} 检测到虚拟显示驱动，但未形成扩展桌面。"
+                "请检查显示设置中的多显示器模式是否为“扩展这些显示器”。"
+            )
+            return not strict_isolation
+
+        self._append_log(f"{program_name} 虚拟显示器准备失败：{message}")
+        return not strict_isolation
+
+    def _bootstrap_virtual_display_on_app_start(self) -> None:
+        settings = self._get_power_settings()
+        if not bool(settings.get("virtual_display_prepare_on_app_start", True)):
+            return
+
+        inf = str(settings.get("virtual_display_driver_inf", "")).strip()
+        auto_install = bool(settings.get("virtual_display_auto_install", False))
+        ok, message = self.virtual_display_service.ensure_automation_display_ready(
+            inf_path=inf,
+            auto_install=auto_install,
+        )
+        if ok:
+            self._append_log("应用启动时已完成虚拟显示器链路准备。")
+            return
+
+        if message == "virtual-display-not-present":
+            self._append_log(
+                "应用启动时未检测到虚拟显示器，且未开启自动安装。"
+                "后续可在电源页开启自动安装（INF 可留空使用项目内置驱动）。"
             )
             return
 
-        self._append_log(f"{program_name} 虚拟显示器准备失败：{message}")
+        self._append_log(f"应用启动时虚拟显示器准备失败：{message}")
 
