@@ -1247,7 +1247,7 @@ class MainWindow(QMainWindow):
                 self._append_log("电源自动化调度已启用")
             else:
                 self.scheduler_service.remove_job("power_automation_tick")
-                self.power_service.cancel_wake_timer()
+                self.power_service.cancel_wake()
                 self._scheduled_wake_marker = ""
                 self._append_log("电源自动化调度已停用")
         except Exception:
@@ -1403,13 +1403,19 @@ class MainWindow(QMainWindow):
         if wake_target <= now:
             wake_target = now + timedelta(seconds=15)
 
-        marker = wake_target.strftime("%Y-%m-%d %H:%M")
+        marker = wake_target.strftime("%Y-%m-%d %H:%M:%S")
         if marker == self._scheduled_wake_marker:
             return
 
         if self.power_service.schedule_wake(wake_target):
             self._scheduled_wake_marker = marker
             self._append_log(f"已安排下一次系统唤醒：{wake_target.strftime('%Y-%m-%d %H:%M')}")
+            report_ok, report = self.power_service.get_wake_timers_report()
+            if report_ok:
+                first_line = report.splitlines()[0] if report.splitlines() else "(empty)"
+                self._append_log(f"WakeTimers 检查：{first_line}")
+            else:
+                self._append_log(f"WakeTimers 检查失败：{report}")
         else:
             self._append_log("系统唤醒定时器设置失败（可能缺少权限或系统策略不支持）")
 

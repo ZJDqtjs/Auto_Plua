@@ -72,11 +72,13 @@ Auto_plua/
 
 ### 6.1 当前已实现能力
 
-- 睡眠唤醒：通过 `CreateWaitableTimerW + SetWaitableTimer(fResume=True)` 安排下一次唤醒。
+- 睡眠唤醒：优先通过 `pywin32 + Task Scheduler COM` 创建 `WakeToRun` 任务；若 COM 不可用则回退到 `CreateWaitableTimerW + SetWaitableTimer(fResume=True)`。
 - 自动登录配置：支持写入 Winlogon 注册表（需管理员权限）。
 - 不占用键鼠输入：在程序配置中将“输入模式”设为“后台窗口消息（不抢鼠标键盘）”，可通过窗口消息发送点击、滚轮、文本和回车。
 - 息屏保护日志：当截图源不可用（常见于息屏/锁屏）时，流程会直接返回明确错误，不再只显示模糊超时。
 - 虚拟显示器驱动接入：支持项目内置驱动一键安装（调用 `pnputil` + `DisplaySwitch /extend`），也可手动指定 `.inf` 覆盖。
+
+- 唤醒状态检查：每次安排唤醒后会调用 `powercfg /waketimers` 记录检查结果，便于排障。
 
 ### 6.2 关键限制（Windows 机制）
 
