@@ -964,10 +964,15 @@ class MainWindow(QMainWindow):
         input_mode = str(entry.get("input_mode", "foreground")).strip() or "foreground"
         settings = self._get_power_settings()
         strict_isolation = bool(settings.get("virtual_display_strict_isolation", True))
-        if strict_isolation and input_mode != "background_window_message":
+        isolation_display_ready = self.virtual_display_service.has_non_primary_monitor()
+        if strict_isolation and isolation_display_ready and input_mode != "background_window_message":
             input_mode = "background_window_message"
             self._append_log(
                 f"{program_name} 已启用强制隔离执行，输入模式自动切换为后台窗口消息。"
+            )
+        elif strict_isolation and not isolation_display_ready:
+            self._append_log(
+                f"{program_name} 未检测到可用虚拟显示器，已回退到原执行逻辑。"
             )
 
         success, message = self.opencv_flow_service.run_flow(
@@ -1502,9 +1507,9 @@ class MainWindow(QMainWindow):
             if strict_isolation and not self.virtual_display_service.has_non_primary_monitor():
                 self._append_log(
                     f"{program_name} 已开启强制隔离，但当前无可用非主显示器。"
-                    "请开启“执行前自动准备虚拟显示器”或手动接入虚拟显示器后再运行。"
+                    "检测到未接入虚拟显示器，已回退到原执行逻辑。"
                 )
-                return False
+                return True
             return True
 
         inf = str(settings.get("virtual_display_driver_inf", "")).strip()
@@ -1523,9 +1528,19 @@ class MainWindow(QMainWindow):
         if message == "virtual-display-not-present":
             self._append_log(
                 f"{program_name} 未检测到虚拟显示器，且未开启自动安装。"
+                "已回退到原执行逻辑。"
                 "如需息屏识图，请开启自动安装；INF 可留空使用项目内置驱动。"
             )
-            return not strict_isolation
+            return True
+
+        if message in {
+            "virtual-display-not-detected",
+            "driver-package-added-but-device-not-created",
+        } or message.startswith("virtual-driver-device-create-failed:"):
+            self._append_log(
+                f"{program_name} 虚拟显示器未成功安装，已回退到原执行逻辑：{message}"
+            )
+            return True
 
         if message == "virtual-display-present-but-not-extended":
             self._append_log(
