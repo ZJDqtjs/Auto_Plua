@@ -1467,9 +1467,20 @@ class MainWindow(QMainWindow):
                     "虚拟显示器安装失败：未找到项目内置驱动。"
                     "请将驱动 INF 放到 drivers/virtual_display 目录，或手动选择 INF。"
                 )
+            elif message == "driver-package-not-staged":
+                self._append_log(
+                    "虚拟显示器安装失败：驱动包未成功进入系统驱动仓库。"
+                    "请以管理员身份运行，并检查驱动签名或系统策略。"
+                )
             else:
                 self._append_log(f"虚拟显示器安装失败：{message}")
             return
+
+        if message.startswith("staged-only-"):
+            self._append_log(
+                "虚拟显示器驱动包已就绪，但系统尚未创建目标显示设备实例（ROOT\\MttVDD）。"
+                "这通常表示系统未执行根设备创建步骤，或与现有虚拟显示方案并存时未激活。"
+            )
 
         ok_extend, msg_extend = self.virtual_display_service.enable_extend_mode()
         if ok_extend and self.virtual_display_service.ensure_automation_display_ready(
@@ -1488,7 +1499,7 @@ class MainWindow(QMainWindow):
         if ready_msg == "virtual-device-instance-missing":
             self._append_log(
                 "虚拟显示器驱动包已进入系统，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
-                "这通常由其他虚拟显示驱动冲突导致，或需使用驱动自带控制器创建实例。"
+                "在不禁用其他虚拟驱动的情况下，系统可能不会自动激活该实例。"
             )
             return
 
@@ -1518,7 +1529,7 @@ class MainWindow(QMainWindow):
         elif staged and not device_present:
             self._append_log(
                 "已检测到目标驱动包，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
-                "请先停用其他虚拟显示驱动（如 Parsec/Oray/GameViewer）后重试安装。"
+                "程序已尝试自动创建设备实例；若仍失败，请重启后重试，或使用驱动自带控制器创建实例。"
             )
         elif installed:
             self._append_log(

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 
@@ -25,6 +27,24 @@ class _MONITORINFO(ctypes.Structure):
     ]
 
 
+class _GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _SP_DEVINFO_DATA(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("ClassGuid", _GUID),
+        ("DevInst", ctypes.c_ulong),
+        ("Reserved", ctypes.c_void_p),
+    ]
+
+
 class VirtualDisplayService:
     """Manage virtual display driver installation and activation on Windows.
 
@@ -35,6 +55,11 @@ class VirtualDisplayService:
     _VIRTUAL_HINTS = ("virtual", "indirect", "idd", "dummy", "usb display")
     _DRIVER_HINTS = ("mttvdd", "iddsample", "indirect display", "virtual display driver")
     _MONITORINFOF_PRIMARY = 0x00000001
+    _DISPLAY_CLASS_GUID = "{4D36E968-E325-11CE-BFC1-08002BE10318}"
+
+    _SPDRP_HARDWAREID = 0x00000001
+    _DICD_GENERATE_ID = 0x00000001
+    _DIF_REGISTERDEVICE = 0x00000019
 
     def _resolved_inf_name(self, inf_path: str) -> str:
         resolved, _ = self.resolve_driver_inf(inf_path)
@@ -90,6 +115,8 @@ class VirtualDisplayService:
         if not self.is_admin():
             return False, "admin-required"
 
+        staged_before = self.is_driver_package_staged(inf_path=str(path))
+
         result = subprocess.run(
             ["pnputil", "/add-driver", str(path), "/install"],
             check=False,
@@ -103,7 +130,145 @@ class VirtualDisplayService:
 
         # Trigger device re-enumeration to let newly installed virtual display appear quickly.
         subprocess.run(["pnputil", "/scan-devices"], check=False, capture_output=True)
-        return True, f"ok-{source}"
+
+        # Some IDD packages are only staged by pnputil and still need explicit root-device creation.
+        self._try_create_root_device_instance(path)
+
+        staged_after = self.is_driver_package_staged(inf_path=str(path))
+        if not staged_after:
+            return False, "driver-package-not-staged"
+
+        instance_present = self.is_target_display_device_present()
+        if instance_present:
+            return True, f"ok-{source}"
+
+        if staged_before:
+            return True, f"staged-only-{source}"
+        return True, f"staged-only-{source}"
+
+    def _extract_root_hardware_ids(self, inf_file: Path) -> list[str]:
+        try:
+            text = inf_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return []
+
+        ids: list[str] = []
+        for line in text.splitlines():
+            candidate = line.split(";", 1)[0].strip()
+            if not candidate:
+                continue
+            match = re.search(r"(root\\[^\s,]+)", candidate, re.IGNORECASE)
+            if not match:
+                continue
+            hwid = match.group(1)
+            if hwid.lower() not in [x.lower() for x in ids]:
+                ids.append(hwid)
+        return ids
+
+    @staticmethod
+    def _guid_from_string(text: str) -> _GUID:
+        u = uuid.UUID(text)
+        data4 = (ctypes.c_ubyte * 8)(*u.bytes[8:16])
+        return _GUID(
+            Data1=u.time_low,
+            Data2=u.time_mid,
+            Data3=u.time_hi_version,
+            Data4=data4,
+        )
+
+    def _create_root_device_setupapi(self, hardware_id: str, inf_file: Path) -> bool:
+        setupapi = ctypes.windll.setupapi
+        newdev = ctypes.windll.newdev
+
+        class_guid = self._guid_from_string(self._DISPLAY_CLASS_GUID)
+
+        hdevinfo = setupapi.SetupDiCreateDeviceInfoList(ctypes.byref(class_guid), None)
+        if hdevinfo in (ctypes.c_void_p(-1).value, 0):
+            return False
+
+        devinfo = _SP_DEVINFO_DATA()
+        devinfo.cbSize = ctypes.sizeof(_SP_DEVINFO_DATA)
+
+        try:
+            created = setupapi.SetupDiCreateDeviceInfoW(
+                hdevinfo,
+                "AutoPlua Virtual Display",
+                ctypes.byref(class_guid),
+                None,
+                None,
+                self._DICD_GENERATE_ID,
+                ctypes.byref(devinfo),
+            )
+            if not created:
+                return False
+
+            # REG_MULTI_SZ for hardware IDs (utf-16le ending with double NUL)
+            multi = (hardware_id + "\0\0").encode("utf-16le")
+            multi_buf = ctypes.create_string_buffer(multi)
+            set_prop = setupapi.SetupDiSetDeviceRegistryPropertyW(
+                hdevinfo,
+                ctypes.byref(devinfo),
+                self._SPDRP_HARDWAREID,
+                ctypes.cast(multi_buf, ctypes.c_void_p),
+                len(multi),
+            )
+            if not set_prop:
+                return False
+
+            registered = setupapi.SetupDiCallClassInstaller(
+                self._DIF_REGISTERDEVICE,
+                hdevinfo,
+                ctypes.byref(devinfo),
+            )
+            if not registered:
+                return False
+
+            reboot = ctypes.c_bool(False)
+            _ = newdev.UpdateDriverForPlugAndPlayDevicesW(
+                None,
+                hardware_id,
+                str(inf_file),
+                0,
+                ctypes.byref(reboot),
+            )
+            return True
+        finally:
+            setupapi.SetupDiDestroyDeviceInfoList(hdevinfo)
+
+    def _try_create_root_device_instance(self, inf_file: Path) -> None:
+        hardware_ids = self._extract_root_hardware_ids(inf_file)
+        if not hardware_ids:
+            return
+
+        devcon_path = None
+        where = subprocess.run(
+            ["where", "devcon"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        if where.returncode == 0:
+            first = (where.stdout or "").splitlines()
+            if first:
+                devcon_path = first[0].strip()
+
+        for hwid in hardware_ids:
+            if devcon_path:
+                subprocess.run(
+                    [devcon_path, "install", str(inf_file), hwid],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+            else:
+                self._create_root_device_setupapi(hwid, inf_file)
+
+        # Always request re-enumeration after instance-creation attempts.
+        subprocess.run(["pnputil", "/scan-devices"], check=False, capture_output=True)
 
     @staticmethod
     def enable_extend_mode() -> tuple[bool, str]:
