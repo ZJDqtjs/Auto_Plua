@@ -2,10 +2,14 @@
 
 import logging
 import os
+import json
+import re
 import shlex
 import socket
 import struct
 import subprocess
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -36,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from autoplua import __version__
 from autoplua.config import load_config, save_config
 from autoplua.models import ManagedProgram
 from autoplua.services.opencv_service import OpenCVFlowService
@@ -49,6 +54,9 @@ from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
 
 
 class MainWindow(QMainWindow):
+    APP_REPOSITORY_URL = "https://github.com/ZJDqtjs/Auto_Plua"
+    GITHUB_API_BASE = "https://api.github.com/repos/ZJDqtjs/Auto_Plua"
+
     app_log_signal = Signal(str)
     program_log_signal = Signal(str)
     schedule_start_signal = Signal(object)
@@ -625,12 +633,112 @@ class MainWindow(QMainWindow):
         feature.setStyleSheet("font-size: 16px; color: #4a4a4a;")
         layout.addWidget(feature)
 
-        version = QLabel("版本：MVP")
+        version = QLabel(f"当前版本：{__version__}")
         version.setStyleSheet("font-size: 16px; color: #4a4a4a;")
         layout.addWidget(version)
 
+        repo = QLabel(
+            f'仓库地址：<a href="{self.APP_REPOSITORY_URL}">{self.APP_REPOSITORY_URL}</a>'
+        )
+        repo.setStyleSheet("font-size: 15px; color: #4a4a4a;")
+        repo.setOpenExternalLinks(True)
+        repo.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        layout.addWidget(repo)
+
+        update_row = QHBoxLayout()
+        check_update_btn = QPushButton("检查更新")
+        check_update_btn.setCursor(Qt.PointingHandCursor)
+        check_update_btn.clicked.connect(self._check_for_updates)
+        update_row.addWidget(check_update_btn)
+
+        self.update_status_label = QLabel("点击“检查更新”可获取 GitHub 最新版本信息。")
+        self.update_status_label.setStyleSheet("font-size: 14px; color: #5a5a5a;")
+        self.update_status_label.setTextFormat(Qt.RichText)
+        self.update_status_label.setOpenExternalLinks(True)
+        self.update_status_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        update_row.addWidget(self.update_status_label)
+        update_row.addStretch()
+        layout.addLayout(update_row)
+
         layout.addStretch()
         return page
+
+    def _check_for_updates(self) -> None:
+        latest_tag, release_url = self._fetch_latest_release_tag()
+        if not latest_tag:
+            self.update_status_label.setText(
+                '未获取到可用版本信息。请检查网络，或直接访问 '
+                f'<a href="{self.APP_REPOSITORY_URL}">项目仓库</a>。'
+            )
+            self._append_log("检查更新失败：未获取到 release/tag 信息")
+            return
+
+        current = self._normalize_version_token(__version__)
+        latest = self._normalize_version_token(latest_tag)
+        if self._is_remote_newer(current, latest):
+            self.update_status_label.setText(
+                f'发现新版本：<a href="{release_url}">{latest_tag}</a>（当前 {__version__}）'
+            )
+            self._append_log(f"检测到新版本：{latest_tag}，当前版本：{__version__}")
+            return
+
+        self.update_status_label.setText(f"当前已是最新版本（{__version__}）")
+        self._append_log(f"更新检查完成：当前版本 {__version__} 已是最新")
+
+    def _fetch_latest_release_tag(self) -> tuple[str, str]:
+        release_data = self._fetch_json(f"{self.GITHUB_API_BASE}/releases/latest")
+        if isinstance(release_data, dict):
+            tag = str(release_data.get("tag_name", "")).strip()
+            if tag:
+                release_url = str(release_data.get("html_url", "")).strip() or self.APP_REPOSITORY_URL
+                return tag, release_url
+
+        tags_data = self._fetch_json(f"{self.GITHUB_API_BASE}/tags")
+        if isinstance(tags_data, list) and tags_data:
+            first = tags_data[0]
+            if isinstance(first, dict):
+                tag = str(first.get("name", "")).strip()
+                if tag:
+                    return tag, f"{self.APP_REPOSITORY_URL}/releases/tag/{tag}"
+
+        return "", self.APP_REPOSITORY_URL
+
+    @staticmethod
+    def _fetch_json(url: str) -> dict | list | None:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "AutoPlua/0.1.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                payload = resp.read().decode("utf-8", errors="ignore")
+                data = json.loads(payload)
+                if isinstance(data, (dict, list)):
+                    return data
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            return None
+        return None
+
+    @staticmethod
+    def _normalize_version_token(version_text: str) -> str:
+        token = version_text.strip()
+        if token.lower().startswith("v"):
+            token = token[1:]
+        return token
+
+    @staticmethod
+    def _is_remote_newer(current: str, remote: str) -> bool:
+        cur_numbers = [int(x) for x in re.findall(r"\d+", current)]
+        remote_numbers = [int(x) for x in re.findall(r"\d+", remote)]
+        if cur_numbers and remote_numbers:
+            max_len = max(len(cur_numbers), len(remote_numbers))
+            cur_pad = cur_numbers + [0] * (max_len - len(cur_numbers))
+            remote_pad = remote_numbers + [0] * (max_len - len(remote_numbers))
+            return tuple(remote_pad) > tuple(cur_pad)
+        return remote != current
 
     def _switch_page(self, index: int, checked: bool = False) -> None:
         for i, btn in enumerate(self.nav_buttons):

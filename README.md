@@ -1,113 +1,111 @@
-# Auto-Plua (MVP)
+# AutoPlua
 
-Auto-Plua（Power & Launch Unified Automation）是一个面向 Windows 的自动化控制工具（MVP）。
+AutoPlua（Power & Launch Unified Automation）是一个面向 Windows 的自动化控制工具，聚焦于“程序调度 + 电源自动化 + OpenCV 流程执行”。
 
-项目名称含义：
-- `P`：Power，电源系统管控（开机、休眠、关机、唤醒等）
-- `L`：Launch，程序启动与任务调度
-- `U`：Unified，统一管理入口
-- `A`：Automation，自动化执行核心
+项目仓库：`https://github.com/ZJDqtjs/Auto_Plua`
 
-当前版本包含：
-- 程序启动/停止/重启与状态检测
-- 定时任务调度（基于 APScheduler）
-- 电源控制（关机/重启/睡眠/锁屏）
-- 本地配置持久化与日志
-- PySide6 图形界面
-- OpenCV 识图流程编辑与执行（含等待模块、默认等待与超时退出）
-- OpenCV 执行模式切换：前台模拟输入 / 后台窗口消息输入（不占用鼠标键盘）
+## 功能概览
 
-## 1. 环境准备
+- 程序启动、停止、重启与状态检测
+- 定时任务调度（APScheduler）
+- 电源控制（关机、重启、睡眠、锁屏）
+- 本地配置持久化与日志记录
+- OpenCV 流程编辑与执行（等待模块、默认等待、超时退出）
+- 输入模式切换：前台模拟输入 / 后台窗口消息输入（不抢键鼠）
+- 虚拟显示器接入：支持内置驱动安装与扩展显示检测
+- 关于页新增仓库入口与“检查更新”按钮（GitHub Release/Tag）
 
-- Python 3.10+
+## 环境要求
+
 - Windows 10/11
+- Python 3.10+
 
-## 2. 安装依赖
+## 安装与运行
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-## 3. 运行
-
-```powershell
 python src/autoplua/main.py
 ```
 
-也可以直接用模块方式启动：
+也可以使用模块方式启动：
 
 ```powershell
 python -m src.autoplua.main
 ```
 
-## 4. 项目结构
+## 界面说明
+
+左侧导航包含：`开始`、`电源`、`日志`、`关于`。
+
+- 开始：管理程序列表、运行状态、调度时间点
+- 电源：配置自动开机登录、关机动作、虚拟显示器策略
+- 日志：查看应用日志与被启动程序日志
+- 关于：查看版本、打开仓库链接、检查更新
+
+### 关于页更新检查机制
+
+- 点击“检查更新”后，会请求 GitHub API：
+  - 优先读取 `releases/latest`
+  - 若无 Release，则回退读取 `tags`
+- 若检测到远端版本高于本地版本，会展示可点击的版本链接
+- 若无法联网或无版本数据，会给出明确提示并保留仓库直达入口
+
+## 项目结构
 
 ```text
 Auto_plua/
+  autoplua.user.json
   requirements.txt
+  drivers/
   src/
     autoplua/
+      __init__.py
       main.py
       config.py
       logger.py
       models.py
       services/
-        process_service.py
-        scheduler_service.py
-        power_service.py
       ui/
         main_window.py
 ```
 
-## 5. 说明
+## 配置说明
 
-- MVP 版本优先保证“可运行 + 可扩展”。
-- 复杂自动化（如 GUI 图像识别）可后续在 `services` 中扩展。
-- 用户配置默认保存在项目根目录 `autoplua.user.json`，可直接共享给其他人使用。
-- 可通过环境变量 `AUTOPLUA_CONFIG_PATH` 指定配置文件路径。
+- 用户配置默认写入项目根目录：`autoplua.user.json`
+- 可通过环境变量覆盖配置路径：`AUTOPLUA_CONFIG_PATH`
+- 电源自动化配置集中在 `power_settings`
 
-## 6. 睡眠唤醒 + 息屏运行 + 不占用键鼠方案
+## 睡眠唤醒 + 息屏运行 + 不占键鼠
 
-### 6.1 当前已实现能力
+### 已实现能力
 
-- 睡眠唤醒：优先通过 `pywin32 + Task Scheduler COM` 创建 `WakeToRun` 任务；若 COM 不可用则回退到 `CreateWaitableTimerW + SetWaitableTimer(fResume=True)`。
-- 自动登录配置：支持写入 Winlogon 注册表（需管理员权限）。
-- 不占用键鼠输入：在程序配置中将“输入模式”设为“后台窗口消息（不抢鼠标键盘）”，可通过窗口消息发送点击、滚轮、文本和回车。
-- 息屏保护日志：当截图源不可用（常见于息屏/锁屏）时，流程会直接返回明确错误，不再只显示模糊超时。
-- 虚拟显示器驱动接入：支持项目内置驱动一键安装（调用 `pnputil` + `DisplaySwitch /extend`），也可手动指定 `.inf` 覆盖。
+- 睡眠唤醒：优先 `pywin32 + Task Scheduler COM`，失败回退 WaitableTimer
+- 自动登录：写入 Winlogon 注册表（需要管理员权限）
+- 后台输入：窗口消息模式可避免抢占鼠标键盘
+- 息屏保护日志：截图源不可用时给出明确错误
+- 虚拟显示器：支持一键安装驱动并切换扩展显示
 
-- 唤醒状态检查：每次安排唤醒后会调用 `powercfg /waketimers` 记录检查结果，便于排障。
+### 关键限制
 
-### 6.2 关键限制（Windows 机制）
+- 锁屏/息屏后桌面渲染可能暂停，OpenCV 可能拿到黑屏或空帧
+- 后台输入只能解决键鼠占用，不能单独解决渲染中断
+- 若要在息屏时持续识图，建议接入虚拟显示器
 
-- 真实息屏/锁屏后，桌面渲染通常会暂停，OpenCV 截图可能黑屏或空帧。
-- 后台窗口消息输入只能解决“键鼠占用”，不能单独解决“息屏渲染中断”。
-- 要在息屏下继续识图，建议使用虚拟显示器驱动保持桌面持续渲染。
+### 推荐配置流程
 
-### 6.3 推荐落地组合
+1. 在电源页开启“电源自动化”，设置开机与关机时间。
+2. 开启“每次执行 OpenCV 前自动准备虚拟显示器”。
+3. 需要自动部署驱动时，开启“若未检测到虚拟显示器则自动安装驱动（需管理员）”。
+4. 程序配置中输入模式选择“后台窗口消息（不抢鼠标键盘）”，并填写准确窗口标题。
+5. 建议管理员权限运行 AutoPlua。
 
-1. 电源页开启“电源自动化”，配置开机时间与睡眠/关机动作。
-2. 在电源页配置虚拟显示器：
-  - 勾选“每次执行 OpenCV 前自动准备虚拟显示器”
-  - 需要自动安装时再勾选“若未检测到虚拟显示器则自动安装驱动（需管理员）”
-  - 建议勾选“启动 AutoPlua 时自动准备虚拟显示器”
-  - 建议勾选“强制在非主显示器执行自动化（失败则中止）”
-  - 如需自定义驱动可选择 `INF` 路径；不填写时默认使用项目内置驱动
-  - 点击“安装并启用”测试
-3. 将程序配置为“后台窗口消息”并填写准确窗口标题。
-4. 以管理员身份运行 AutoPlua；长期运行建议封装为 Windows 服务或开机自启常驻。
+## 常见问题
 
-在“强制隔离执行”开启时，若虚拟显示器链路未就绪，OpenCV 自动化会直接中止，避免回落到主显示器干扰人工操作。
-
-### 6.5 重要说明
-
-- AutoPlua 不能在本机“从零生成一个新的内核显示驱动”，但可以自动安装项目内置或手动指定的现成虚拟显示驱动包（INF）。
-- 默认内置驱动目录为 `drivers/virtual_display`；发布安装包时请确保将驱动 INF 及其关联文件一并打包到该目录。
-
-### 6.4 常见故障排查
-
-- 日志 `screen-capture-unavailable-possibly-screen-off-or-locked`：说明当前无有效截图源，优先检查虚拟显示器与锁屏状态。
-- 日志 `target-window-not-found`：窗口标题不匹配，需使用系统实际窗口标题。
-- 日志 `step-timeout-20s-click-target-not-found`：模板识别失败，检查模板清晰度、分辨率一致性、窗口尺寸和 DPI。
+- `screen-capture-unavailable-possibly-screen-off-or-locked`
+  - 当前无可用截图源，优先检查虚拟显示器与锁屏状态。
+- `target-window-not-found`
+  - 目标窗口标题不匹配。
+- `step-timeout-20s-click-target-not-found`
+  - 模板识别失败，检查模板质量、分辨率、窗口尺寸与 DPI。
