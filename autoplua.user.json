@@ -89,13 +89,16 @@
             "title": "启动",
             "x": 63,
             "y": 158,
-            "params": {}
+            "params": {
+              "startup_timeout_seconds": 30,
+              "next_step_delay_seconds": 3
+            }
           },
           {
             "id": "212d8a53-e49f-48da-88c9-fccaa5aff61c",
             "module": "end",
             "title": "结束",
-            "x": 789,
+            "x": 516,
             "y": 137,
             "params": {}
           },
@@ -113,7 +116,7 @@
             "id": "151e3827-01b2-4f54-a651-78c716972fe2",
             "module": "left_click",
             "title": "左键点击",
-            "x": 492,
+            "x": 442,
             "y": 36,
             "params": {
               "image_path": "D:\\data10086\\Pycharm\\project\\Auto_plua\\template_image\\template_20260308_092703_21afb3.png"

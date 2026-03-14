@@ -331,13 +331,14 @@ class OpenCVFlowService:
             if input_mode == "background_window_message":
                 threshold = max(threshold, BACKGROUND_MIN_TEMPLATE_THRESHOLD)
 
-            require_window_capture = input_mode == "background_window_message" and bool(target_window_title)
+            use_window_capture = input_mode == "background_window_message" and bool(target_window_title)
+            require_window_capture = use_window_capture
             if require_window_capture and not self._window_handle_by_title(target_window_title):
                 return False, "target-window-not-found"
 
             target = self._locate_by_template(
                 image_path,
-                target_window_title=target_window_title,
+                target_window_title=target_window_title if use_window_capture else "",
                 threshold=threshold,
                 require_window_capture=require_window_capture,
             )

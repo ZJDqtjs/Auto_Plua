@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from PySide6.QtCore import Qt, QMimeData, QPoint, QPointF, Signal
+from PySide6.QtCore import Qt, QMimeData, QPoint, QPointF, QSize, Signal
 from PySide6.QtGui import QColor, QDrag, QGuiApplication, QImage, QKeyEvent, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -33,6 +33,7 @@ FLOW_MODULE_TITLES = {
 }
 
 CLICK_MODULES = {"left_click", "right_click"}
+INLINE_CONFIG_MODULES = {"start", "scroll"}
 NO_CONFIG_MODULES = {"end", "enter"}
 
 
@@ -134,17 +135,30 @@ class FlowNodeWidget(QFrame):
         self._drag_start_global = QPoint()
         self._drag_origin = QPoint()
         self._selected = False
+        self._syncing_inline = False
+        self._collapsed = False
+        self._expanded_size = QSize()
+        self._collapsed_size = QSize()
 
         if self.module_type == "start":
-            self.setFixedSize(136, 88)
+            self._expanded_size = QSize(220, 156)
+            self._collapsed_size = QSize(220, 74)
         elif self.module_type == "end":
-            self.setFixedSize(124, 74)
+            self._expanded_size = QSize(124, 74)
+            self._collapsed_size = QSize(124, 74)
         elif self.module_type == "enter":
-            self.setFixedSize(124, 82)
+            self._expanded_size = QSize(124, 82)
+            self._collapsed_size = QSize(124, 82)
         elif self.module_type in CLICK_MODULES:
-            self.setFixedSize(198, 168)
+            self._expanded_size = QSize(198, 168)
+            self._collapsed_size = QSize(198, 74)
+        elif self.module_type == "scroll":
+            self._expanded_size = QSize(220, 126)
+            self._collapsed_size = QSize(220, 74)
         else:
-            self.setFixedSize(144, 88)
+            self._expanded_size = QSize(144, 88)
+            self._collapsed_size = QSize(144, 74)
+        self.setFixedSize(self._expanded_size)
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
@@ -152,11 +166,29 @@ class FlowNodeWidget(QFrame):
         layout.setSpacing(8)
 
         self.title_label = QLabel(title)
-        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.title_label.setStyleSheet(
             "font-size: 16px; font-weight: 700; color: #1f2937;"
             "border: 1px solid #b7c9dd; border-radius: 10px; padding: 4px 6px; background: #ffffff;"
         )
+
+        self.has_collapsible_content = self.module_type not in NO_CONFIG_MODULES
+        self.collapse_btn = QPushButton("▾")
+        self.collapse_btn.setFixedSize(24, 24)
+        self.collapse_btn.setCursor(Qt.PointingHandCursor)
+        self.collapse_btn.setStyleSheet(
+            "QPushButton { border: 1px solid #b7c9dd; border-radius: 6px; background: #ffffff;"
+            " color: #334155; font-size: 14px; font-weight: 700; padding: 0px; }"
+            "QPushButton:hover { border-color: #0b6ecf; color: #0b6ecf; }"
+        )
+        self.collapse_btn.clicked.connect(self._toggle_collapsed)
+        self.collapse_btn.setVisible(self.has_collapsible_content)
+
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        header_layout.addWidget(self.title_label)
+        header_layout.addWidget(self.collapse_btn)
 
         self.sub_label = QLabel("双击配置")
         self.sub_label.setAlignment(Qt.AlignCenter)
@@ -171,16 +203,77 @@ class FlowNodeWidget(QFrame):
         self.preview_label.setStyleSheet("border: 1px dashed #b7c9dd; border-radius: 8px; background: #f8fbff;")
         self.preview_label.hide()
 
-        layout.addWidget(self.title_label)
+        self.inline_panel = QFrame()
+        self.inline_panel.setStyleSheet(
+            "QFrame { border: 1px dashed #8a8a8a; border-radius: 10px; background: #ffffff; }"
+        )
+        self.inline_panel.hide()
+
+        inline_layout = QVBoxLayout(self.inline_panel)
+        inline_layout.setContentsMargins(8, 6, 8, 6)
+        inline_layout.setSpacing(6)
+
+        self.start_timeout_spin = QSpinBox()
+        self.start_timeout_spin.setRange(1, 300)
+        self.start_timeout_spin.setSingleStep(5)
+
+        self.start_next_delay_spin = QSpinBox()
+        self.start_next_delay_spin.setRange(0, 30)
+        self.start_next_delay_spin.setSingleStep(1)
+
+        start_timeout_row = QHBoxLayout()
+        start_timeout_row.setContentsMargins(0, 0, 0, 0)
+        start_timeout_row.setSpacing(6)
+        start_timeout_row.addWidget(QLabel("最大超时(秒)"))
+        start_timeout_row.addWidget(self.start_timeout_spin)
+
+        start_delay_row = QHBoxLayout()
+        start_delay_row.setContentsMargins(0, 0, 0, 0)
+        start_delay_row.setSpacing(6)
+        start_delay_row.addWidget(QLabel("延迟点击(秒)"))
+        start_delay_row.addWidget(self.start_next_delay_spin)
+
+        self.scroll_steps_spin = QSpinBox()
+        self.scroll_steps_spin.setRange(-5000, 5000)
+        self.scroll_steps_spin.setSingleStep(10)
+
+        scroll_row = QHBoxLayout()
+        scroll_row.setContentsMargins(0, 0, 0, 0)
+        scroll_row.setSpacing(6)
+        scroll_row.addWidget(QLabel("滚动行数"))
+        scroll_row.addWidget(self.scroll_steps_spin)
+
+        if self.module_type == "start":
+            inline_layout.addLayout(start_timeout_row)
+            inline_layout.addLayout(start_delay_row)
+            self.inline_panel.show()
+        elif self.module_type == "scroll":
+            inline_layout.addLayout(scroll_row)
+            self.inline_panel.show()
+
+        self.start_timeout_spin.valueChanged.connect(self._on_inline_params_changed)
+        self.start_next_delay_spin.valueChanged.connect(self._on_inline_params_changed)
+        self.scroll_steps_spin.valueChanged.connect(self._on_inline_params_changed)
+
+        self._collapsible_widgets: list[QWidget] = []
+
+        layout.addLayout(header_layout)
         if self.module_type not in NO_CONFIG_MODULES:
             if self.module_type in CLICK_MODULES:
                 self.sub_label.hide()
+            elif self.module_type in INLINE_CONFIG_MODULES:
+                self.sub_label.hide()
             else:
                 layout.addWidget(self.sub_label)
+                self._collapsible_widgets.append(self.sub_label)
         else:
             self.sub_label.hide()
         if self.module_type in CLICK_MODULES:
             layout.addWidget(self.preview_label)
+            self._collapsible_widgets.append(self.preview_label)
+        if self.module_type in INLINE_CONFIG_MODULES:
+            layout.addWidget(self.inline_panel)
+            self._collapsible_widgets.append(self.inline_panel)
         self._apply_style()
 
     def set_selected(self, selected: bool) -> None:
@@ -192,12 +285,66 @@ class FlowNodeWidget(QFrame):
         if self.module_type in CLICK_MODULES:
             image_path = normalize_image_path(str(self.params.get("image_path", "")))
             self.params["image_path"] = image_path
+        if self.module_type == "start":
+            self.params.setdefault("startup_timeout_seconds", 30)
+            self.params.setdefault("next_step_delay_seconds", 3)
+        if self.module_type == "scroll":
+            self.params.setdefault("steps", 120)
+        self._collapsed = bool(self.params.get("_collapsed", False))
+        self._sync_inline_editors_from_params()
         if self.module_type in CLICK_MODULES:
             self._refresh_preview()
         if self.module_type in NO_CONFIG_MODULES:
             return
-        if self.module_type not in CLICK_MODULES:
+        if self.module_type not in CLICK_MODULES and self.module_type not in INLINE_CONFIG_MODULES:
             self.sub_label.setText("双击配置")
+        self._apply_collapsed_state()
+        self._apply_style()
+
+    def _toggle_collapsed(self) -> None:
+        if not self.has_collapsible_content:
+            return
+        self._collapsed = not self._collapsed
+        self.params["_collapsed"] = self._collapsed
+        self._apply_collapsed_state()
+        self.moved.emit()
+
+    def _apply_collapsed_state(self) -> None:
+        if not self.has_collapsible_content:
+            self.setFixedSize(self._expanded_size)
+            return
+
+        for widget in self._collapsible_widgets:
+            widget.setVisible(not self._collapsed)
+
+        if self._collapsed:
+            self.setFixedSize(self._collapsed_size)
+            self.collapse_btn.setText("▸")
+        else:
+            self.setFixedSize(self._expanded_size)
+            self.collapse_btn.setText("▾")
+
+    def _sync_inline_editors_from_params(self) -> None:
+        if self.module_type not in INLINE_CONFIG_MODULES:
+            return
+        self._syncing_inline = True
+        try:
+            if self.module_type == "start":
+                self.start_timeout_spin.setValue(int(self.params.get("startup_timeout_seconds", 30)))
+                self.start_next_delay_spin.setValue(int(self.params.get("next_step_delay_seconds", 3)))
+            elif self.module_type == "scroll":
+                self.scroll_steps_spin.setValue(int(self.params.get("steps", 120)))
+        finally:
+            self._syncing_inline = False
+
+    def _on_inline_params_changed(self) -> None:
+        if self._syncing_inline:
+            return
+        if self.module_type == "start":
+            self.params["startup_timeout_seconds"] = int(self.start_timeout_spin.value())
+            self.params["next_step_delay_seconds"] = int(self.start_next_delay_spin.value())
+        elif self.module_type == "scroll":
+            self.params["steps"] = int(self.scroll_steps_spin.value())
         self._apply_style()
 
     def _refresh_preview(self) -> None:

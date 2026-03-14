@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from autoplua.ui.workflow_editor import (
     CLICK_MODULES,
     FLOW_MODULE_TITLES,
+    INLINE_CONFIG_MODULES,
     NO_CONFIG_MODULES,
     ModulePaletteButton,
     NodeParamDialog,
@@ -101,6 +102,23 @@ class ProgramConfigDialog(QDialog):
         args_tip = QLabel("若填写启动参数，可直接一步完成启动；OpenCV 流程作为兜底配置使用。")
         args_tip.setStyleSheet("font-size: 14px; color: #4b5563;")
         args_layout.addWidget(args_tip)
+        root.addWidget(args_frame)
+
+        module_box = QFrame()
+        module_box.setStyleSheet("QFrame { border: 1px solid #d8e1eb; border-radius: 12px; background: #fff; }")
+        module_layout = QVBoxLayout(module_box)
+        module_layout.setContentsMargins(14, 12, 14, 14)
+        module_layout.setSpacing(10)
+
+        module_title = QLabel("OpenCV识图点击")
+        module_title.setStyleSheet("font-size: 20px; font-weight: 700; color: #1f2937;")
+        module_layout.addWidget(module_title)
+
+        runtime_cfg = QFrame()
+        runtime_cfg.setStyleSheet("QFrame { border: 1px solid #d9e2ec; border-radius: 10px; background: #f8fafc; }")
+        runtime_cfg_layout = QVBoxLayout(runtime_cfg)
+        runtime_cfg_layout.setContentsMargins(10, 8, 10, 8)
+        runtime_cfg_layout.setSpacing(8)
 
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
@@ -117,7 +135,7 @@ class ProgramConfigDialog(QDialog):
         mode_row.addWidget(mode_label)
         mode_row.addWidget(self.input_mode_combo)
         mode_row.addStretch()
-        args_layout.addLayout(mode_row)
+        runtime_cfg_layout.addLayout(mode_row)
 
         target_row = QHBoxLayout()
         target_row.setSpacing(8)
@@ -127,18 +145,9 @@ class ProgramConfigDialog(QDialog):
         self.target_window_input.setPlaceholderText("仅后台窗口消息模式必填，例如：碧蓝航线")
         target_row.addWidget(target_label)
         target_row.addWidget(self.target_window_input)
-        args_layout.addLayout(target_row)
-        root.addWidget(args_frame)
+        runtime_cfg_layout.addLayout(target_row)
 
-        module_box = QFrame()
-        module_box.setStyleSheet("QFrame { border: 1px solid #d8e1eb; border-radius: 12px; background: #fff; }")
-        module_layout = QVBoxLayout(module_box)
-        module_layout.setContentsMargins(14, 12, 14, 14)
-        module_layout.setSpacing(10)
-
-        module_title = QLabel("OpenCV识图点击")
-        module_title.setStyleSheet("font-size: 20px; font-weight: 700; color: #1f2937;")
-        module_layout.addWidget(module_title)
+        module_layout.addWidget(runtime_cfg)
 
         chip_row = QHBoxLayout()
         chip_row.setSpacing(10)
@@ -185,7 +194,8 @@ class ProgramConfigDialog(QDialog):
 
         guide = QLabel(
             "拖拽上方模块到下方画布，打开【连线模式】后按顺序点击两个模块可连线。"
-            "双击模块可配置参数（点击支持图片识别或手动坐标，支持 Ctrl+V 粘贴截图并在模块下方预览；无等待模块时默认步骤间隔 2 秒）。"
+            "启动和鼠标滚动模块可直接在节点下方配置；其余模块可双击配置。"
+            "点击支持图片识别或手动坐标，支持 Ctrl+V 粘贴截图并在模块下方预览；无等待模块时默认步骤间隔 2 秒。"
         )
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size: 14px; color: #4b5563;")
@@ -229,6 +239,8 @@ class ProgramConfigDialog(QDialog):
         if not node:
             return
         if node.module_type in NO_CONFIG_MODULES:
+            return
+        if node.module_type in INLINE_CONFIG_MODULES:
             return
         dialog = NodeParamDialog(module_type=node.module_type, initial=node.params, parent=self)
         if dialog.exec() != QDialog.Accepted:

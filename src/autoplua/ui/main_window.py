@@ -961,7 +961,18 @@ class MainWindow(QMainWindow):
         nodes_count = len(flow.get("nodes", [])) if isinstance(flow.get("nodes", []), list) else 0
         self._append_log(f"{program_name} 开始执行 OpenCV 流程，节点数：{nodes_count}")
 
-        input_mode = str(entry.get("input_mode", "foreground")).strip() or "foreground"
+        raw_input_mode = str(entry.get("input_mode", "foreground")).strip()
+        normalized_mode = raw_input_mode.lower()
+        if normalized_mode in {
+            "background_window_message",
+            "background",
+            "window_message",
+            "后台窗口消息",
+            "后台窗口消息（不抢鼠标键盘）",
+        }:
+            input_mode = "background_window_message"
+        else:
+            input_mode = "foreground"
         settings = self._get_power_settings()
         strict_isolation = bool(settings.get("virtual_display_strict_isolation", True))
         isolation_display_ready = self.virtual_display_service.has_non_primary_monitor()
@@ -972,8 +983,12 @@ class MainWindow(QMainWindow):
             )
         elif strict_isolation and not isolation_display_ready:
             self._append_log(
-                f"{program_name} 未检测到可用虚拟显示器，已回退到原执行逻辑。"
+                f"{program_name} 未检测到可用虚拟显示器，已回退到非隔离执行。"
+                "将继续按你配置的输入模式执行。"
             )
+
+        mode_text = "后台窗口消息" if input_mode == "background_window_message" else "前台模拟"
+        self._append_log(f"{program_name} 本次输入模式：{mode_text}（raw={raw_input_mode or 'empty'}）")
 
         success, message = self.opencv_flow_service.run_flow(
             flow,
