@@ -1247,7 +1247,7 @@ class MainWindow(QMainWindow):
                 self._append_log("电源自动化调度已启用")
             else:
                 self.scheduler_service.remove_job("power_automation_tick")
-                self.power_service.cancel_wake()
+                self.power_service.cancel_wake_timer()
                 self._scheduled_wake_marker = ""
                 self._append_log("电源自动化调度已停用")
         except Exception:
@@ -1403,19 +1403,13 @@ class MainWindow(QMainWindow):
         if wake_target <= now:
             wake_target = now + timedelta(seconds=15)
 
-        marker = wake_target.strftime("%Y-%m-%d %H:%M:%S")
+        marker = wake_target.strftime("%Y-%m-%d %H:%M")
         if marker == self._scheduled_wake_marker:
             return
 
         if self.power_service.schedule_wake(wake_target):
             self._scheduled_wake_marker = marker
             self._append_log(f"已安排下一次系统唤醒：{wake_target.strftime('%Y-%m-%d %H:%M')}")
-            report_ok, report = self.power_service.get_wake_timers_report()
-            if report_ok:
-                first_line = report.splitlines()[0] if report.splitlines() else "(empty)"
-                self._append_log(f"WakeTimers 检查：{first_line}")
-            else:
-                self._append_log(f"WakeTimers 检查失败：{report}")
         else:
             self._append_log("系统唤醒定时器设置失败（可能缺少权限或系统策略不支持）")
 
@@ -1467,75 +1461,37 @@ class MainWindow(QMainWindow):
                     "虚拟显示器安装失败：未找到项目内置驱动。"
                     "请将驱动 INF 放到 drivers/virtual_display 目录，或手动选择 INF。"
                 )
-            elif message == "driver-package-not-staged":
+            elif message == "driver-package-added-but-device-not-created":
                 self._append_log(
-                    "虚拟显示器安装失败：驱动包未成功进入系统驱动仓库。"
-                    "请以管理员身份运行，并检查驱动签名或系统策略。"
+                    "虚拟显示器安装失败：驱动包已导入系统，但未创建设备实例。"
+                    "当前仅用 pnputil 安装不会弹安装窗口；若设备管理器中没有 'Virtual Display Driver/MttVDD'，"
+                    "需使用驱动作者提供的控制程序或脚本创建 Root\\MttVDD 设备。"
+                )
+            elif message.startswith("virtual-driver-device-create-failed:"):
+                detail = message.split(":", 1)[1]
+                self._append_log(
+                    "虚拟显示器安装失败：自动创建设备实例失败。"
+                    f"系统错误细节={detail}。"
+                    "请以管理员权限运行，并确认系统未拦截未签名/不受信任驱动。"
                 )
             else:
                 self._append_log(f"虚拟显示器安装失败：{message}")
             return
 
-        if message.startswith("staged-only-"):
-            self._append_log(
-                "虚拟显示器驱动包已就绪，但系统尚未创建目标显示设备实例（ROOT\\MttVDD）。"
-                "这通常表示系统未执行根设备创建步骤，或与现有虚拟显示方案并存时未激活。"
-            )
-
         ok_extend, msg_extend = self.virtual_display_service.enable_extend_mode()
-        if ok_extend and self.virtual_display_service.ensure_automation_display_ready(
-            inf_path=str(inf),
-            auto_install=False,
-            wait_seconds=6.0,
-        )[0]:
+        if ok_extend:
             self._append_log("虚拟显示器驱动安装成功，已切换为扩展显示模式。")
             return
-
-        _, ready_msg = self.virtual_display_service.ensure_automation_display_ready(
-            inf_path=str(inf),
-            auto_install=False,
-            wait_seconds=1.0,
-        )
-        if ready_msg == "virtual-device-instance-missing":
-            self._append_log(
-                "虚拟显示器驱动包已进入系统，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
-                "在不禁用其他虚拟驱动的情况下，系统可能不会自动激活该实例。"
-            )
-            return
-
-        if ok_extend:
-            self._append_log(
-                "虚拟显示器驱动已安装，但当前仍未激活为非主显示器。"
-                "请打开系统显示设置确认‘扩展这些显示器’，或重启后再试。"
-            )
-            return
-
         self._append_log(f"虚拟显示器驱动已安装，但扩展显示失败：{msg_extend}")
 
     def _test_virtual_display_ready(self) -> None:
-        settings = self._get_power_settings()
-        inf = str(settings.get("virtual_display_driver_inf", "")).strip()
-        active = self.virtual_display_service.has_non_primary_monitor()
-        installed = self.virtual_display_service.is_virtual_display_driver_installed(inf_path=inf)
-        staged = self.virtual_display_service.is_driver_package_staged(inf_path=inf)
-        device_present = self.virtual_display_service.is_target_display_device_present()
-
-        if active:
+        present = self.virtual_display_service.is_virtual_display_present()
+        if present:
             ok_extend, msg = self.virtual_display_service.enable_extend_mode()
             if ok_extend:
                 self._append_log("虚拟显示器检测通过，扩展显示已启用。")
             else:
                 self._append_log(f"检测到虚拟显示器，但扩展显示启用失败：{msg}")
-        elif staged and not device_present:
-            self._append_log(
-                "已检测到目标驱动包，但目标显示设备实例未创建（ROOT\\MttVDD 缺失）。"
-                "程序已尝试自动创建设备实例；若仍失败，请重启后重试，或使用驱动自带控制器创建实例。"
-            )
-        elif installed:
-            self._append_log(
-                "已检测到虚拟显示驱动已安装，但当前未激活为非主显示器。"
-                "可点击“安装并启用”或检查系统显示设置为扩展模式。"
-            )
         else:
             self._append_log("未检测到虚拟显示器。可先选择 INF 后点击“安装并启用”。")
 
