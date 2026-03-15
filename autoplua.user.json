@@ -190,7 +190,7 @@
   "power_enabled": true,
   "power_settings": {
     "boot_frequency": "每天",
-    "boot_time": "07:40",
+    "boot_time": "09:55",
     "shutdown_frequency": "每天",
     "shutdown_time": "01:00",
     "shutdown_action": "睡眠",

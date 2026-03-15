@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import locale
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -114,11 +116,26 @@ class VirtualDisplayService:
             check=False,
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=locale.getpreferredencoding(False),
             errors="ignore",
         )
         if result.returncode != 0:
-            return False, (result.stderr or result.stdout or "pnputil-failed").strip()
+            # Repeated installs may report a non-zero code while the driver is already present.
+            if self.is_virtual_driver_device_present() or self.has_non_primary_monitor():
+                return True, "already-installed"
+
+            output = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+            duplicate_hints = (
+                "already",
+                "already installed",
+                "already exists",
+                "already added",
+                "已安装",
+                "已存在",
+                "已添加",
+            )
+            if not any(hint in output for hint in duplicate_hints):
+                return False, (result.stderr or result.stdout or "pnputil-failed").strip()
 
         # Trigger device re-enumeration to let newly installed virtual display appear quickly.
         subprocess.run(["pnputil", "/scan-devices"], check=False, capture_output=True)
@@ -143,6 +160,99 @@ class VirtualDisplayService:
         if "driver package added successfully" in out:
             return False, "driver-package-added-but-device-not-created"
         return False, "virtual-driver-device-not-detected"
+
+    def uninstall_driver(self, inf_path: str) -> tuple[bool, str]:
+        if not self.is_admin():
+            return False, "admin-required"
+
+        preferred_inf: Path | None = None
+        if inf_path.strip():
+            preferred_inf = Path(inf_path).expanduser()
+        else:
+            preferred_inf = self.find_embedded_inf()
+
+        removed_any = False
+
+        for instance_id in self._list_virtual_device_instance_ids():
+            result = subprocess.run(
+                ["pnputil", "/remove-device", instance_id],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding=locale.getpreferredencoding(False),
+                errors="ignore",
+            )
+            if result.returncode == 0:
+                removed_any = True
+
+        for published_name in self._list_virtual_published_driver_names(preferred_inf):
+            result = subprocess.run(
+                ["pnputil", "/delete-driver", published_name, "/uninstall", "/force"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding=locale.getpreferredencoding(False),
+                errors="ignore",
+            )
+            if result.returncode == 0:
+                removed_any = True
+
+        subprocess.run(["pnputil", "/scan-devices"], check=False, capture_output=True)
+
+        if removed_any:
+            return True, "ok"
+        if not self.is_virtual_driver_device_present() and not self.has_non_primary_monitor():
+            return True, "already-uninstalled"
+        return False, "uninstall-failed"
+
+    def _list_virtual_device_instance_ids(self) -> list[str]:
+        command = (
+            "Get-PnpDevice -Class Display -ErrorAction SilentlyContinue "
+            "| Where-Object { $_.InstanceId -like 'ROOT\\MTTVDD*' -or $_.FriendlyName -like '*MttVDD*' } "
+            "| Select-Object -ExpandProperty InstanceId"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="ignore",
+        )
+        if result.returncode != 0:
+            return []
+        return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+    def _list_virtual_published_driver_names(self, preferred_inf: Path | None) -> list[str]:
+        result = subprocess.run(
+            ["pnputil", "/enum-drivers"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="ignore",
+        )
+        if result.returncode != 0:
+            return []
+
+        text = result.stdout or ""
+        blocks = re.split(r"\r?\n\s*\r?\n", text)
+        matches: list[str] = []
+        preferred_name = preferred_inf.name.lower() if preferred_inf else ""
+        fallback_hints = ("mttvdd", "root\\mttvdd")
+
+        for block in blocks:
+            lower = block.lower()
+            if preferred_name and preferred_name in lower:
+                pass
+            elif not any(hint in lower for hint in fallback_hints):
+                continue
+
+            for name in re.findall(r"oem\d+\.inf", lower):
+                if name not in matches:
+                    matches.append(name)
+
+        return matches
 
     def _create_root_device_and_bind_driver(self, hardware_id: str, inf_path: Path) -> tuple[bool, str]:
         guid = self._guid_from_string(self._DISPLAY_CLASS_GUID)
@@ -277,7 +387,7 @@ class VirtualDisplayService:
             check=False,
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=locale.getpreferredencoding(False),
             errors="ignore",
         )
         if result.returncode != 0:
@@ -289,6 +399,7 @@ class VirtualDisplayService:
     def is_virtual_driver_device_present(self) -> bool:
         command = (
             "Get-PnpDevice -Class Display -ErrorAction SilentlyContinue "
+            "| Where-Object { $_.InstanceId -like 'ROOT\\MTTVDD*' -or $_.FriendlyName -like '*MttVDD*' -or $_.FriendlyName -like '*Virtual Display Driver*' } "
             "| ForEach-Object { ($_.FriendlyName + '|' + $_.InstanceId) }"
         )
         result = subprocess.run(
@@ -296,7 +407,7 @@ class VirtualDisplayService:
             check=False,
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding=locale.getpreferredencoding(False),
             errors="ignore",
         )
         if result.returncode != 0:
@@ -333,7 +444,9 @@ class VirtualDisplayService:
                 return False, message
             return True, "ready"
 
-        if not self.is_virtual_display_present():
+        driver_present = self.is_virtual_driver_device_present()
+        monitor_present = self.is_virtual_display_present()
+        if not driver_present and not monitor_present:
             if not auto_install:
                 return False, "virtual-display-not-present"
 
@@ -351,7 +464,7 @@ class VirtualDisplayService:
                 return True, "installed-and-ready"
             time.sleep(0.4)
 
-        if self.is_virtual_display_present():
+        if self.is_virtual_driver_device_present() or self.is_virtual_display_present():
             return False, "virtual-display-present-but-not-extended"
         return False, "virtual-display-not-detected"
 

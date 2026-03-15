@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import locale
 import shlex
 import subprocess
 import threading
@@ -36,10 +37,8 @@ class ProcessService:
             shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
+            text=False,
+            bufsize=0,
         )
         self._children[program.name] = process
 
@@ -142,8 +141,8 @@ class ProcessService:
     def _monitor_process_output(self, program_name: str, process: subprocess.Popen) -> None:
         try:
             if process.stdout is not None:
-                for raw_line in iter(process.stdout.readline, ""):
-                    line = raw_line.rstrip("\r\n")
+                for raw_line in iter(process.stdout.readline, b""):
+                    line = self._decode_output_line(raw_line)
                     if line:
                         self._emit_output(program_name, line)
         finally:
@@ -155,6 +154,29 @@ class ProcessService:
             if cached is process:
                 self._children.pop(program_name, None)
             self._emit_exit(program_name, code)
+
+    @staticmethod
+    def _decode_output_line(raw_line: bytes) -> str:
+        # Windows child processes may emit GBK/CP936 while Python often emits UTF-8.
+        data = raw_line.rstrip(b"\r\n")
+        if not data:
+            return ""
+
+        candidates = ["utf-8", locale.getpreferredencoding(False), "gbk", "cp936"]
+        seen: set[str] = set()
+        for enc in candidates:
+            if not enc:
+                continue
+            key = enc.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                continue
+
+        return data.decode("utf-8", errors="replace")
 
     def _terminate_process_tree(self, pid: int, program_name: str) -> bool:
         try:

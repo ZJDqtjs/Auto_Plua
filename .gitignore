@@ -3,3 +3,6 @@
 #/template_image
 __pycache__/
 *.pyc
+/build/
+/dist/
+/AutoPlua.spec

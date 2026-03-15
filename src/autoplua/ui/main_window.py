@@ -56,6 +56,9 @@ from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
 class MainWindow(QMainWindow):
     APP_REPOSITORY_URL = "https://github.com/ZJDqtjs/Auto_Plua"
     GITHUB_API_BASE = "https://api.github.com/repos/ZJDqtjs/Auto_Plua"
+    POWER_TICK_SECONDS = 30
+    POWER_WINDOW_SECONDS = 35
+    POWER_RESUME_GAP_SECONDS = 120
 
     app_log_signal = Signal(str)
     program_log_signal = Signal(str)
@@ -344,6 +347,9 @@ class MainWindow(QMainWindow):
         inf_install_btn = QPushButton("安装并启用")
         inf_install_btn.setCursor(Qt.PointingHandCursor)
         inf_install_btn.clicked.connect(self._install_virtual_display_driver)
+        inf_uninstall_btn = QPushButton("卸载驱动")
+        inf_uninstall_btn.setCursor(Qt.PointingHandCursor)
+        inf_uninstall_btn.clicked.connect(self._uninstall_virtual_display_driver)
         inf_test_btn = QPushButton("检测状态")
         inf_test_btn.setCursor(Qt.PointingHandCursor)
         inf_test_btn.clicked.connect(self._test_virtual_display_ready)
@@ -351,6 +357,7 @@ class MainWindow(QMainWindow):
         inf_row.addWidget(self.virtual_display_inf_input)
         inf_row.addWidget(inf_pick_btn)
         inf_row.addWidget(inf_install_btn)
+        inf_row.addWidget(inf_uninstall_btn)
         inf_row.addWidget(inf_test_btn)
         panel_layout.addLayout(inf_row)
 
@@ -1367,15 +1374,15 @@ class MainWindow(QMainWindow):
             if self.config.get("power_enabled", False):
                 self.scheduler_service.add_interval_job(
                     job_id="power_automation_tick",
-                    seconds=30,
+                    seconds=self.POWER_TICK_SECONDS,
                     func=self._power_automation_tick,
                 )
-                self._last_power_tick_at = datetime.now() - timedelta(seconds=35)
+                self._last_power_tick_at = datetime.now() - timedelta(seconds=self.POWER_WINDOW_SECONDS)
                 self._schedule_next_wake_if_possible()
                 self._append_log("电源自动化调度已启用")
             else:
                 self.scheduler_service.remove_job("power_automation_tick")
-                self.power_service.cancel_wake_timer()
+                self.power_service.cancel_wake()
                 self._scheduled_wake_marker = ""
                 self._append_log("电源自动化调度已停用")
         except Exception:
@@ -1387,8 +1394,17 @@ class MainWindow(QMainWindow):
 
         settings = self._get_power_settings()
         now = datetime.now()
-        window_start = self._last_power_tick_at or (now - timedelta(seconds=35))
+        window_start = self._last_power_tick_at or (now - timedelta(seconds=self.POWER_WINDOW_SECONDS))
         self._last_power_tick_at = now
+
+        gap_seconds = (now - window_start).total_seconds()
+        if gap_seconds > self.POWER_RESUME_GAP_SECONDS:
+            # After resume/manual wake, avoid replaying actions missed hours ago.
+            self._append_log(
+                f"检测到系统恢复或长时间停顿（约 {int(gap_seconds)} 秒），"
+                "已跳过历史补触发并从当前时间继续调度"
+            )
+            window_start = now - timedelta(seconds=self.POWER_WINDOW_SECONDS)
 
         boot_hit, boot_target = self._time_hit_in_window(
             settings.get("boot_frequency", "每天"),
@@ -1504,13 +1520,21 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
 
+        near_past_candidate: datetime | None = None
         for offset in range(0, 8):
             day = (now + timedelta(days=offset)).date()
             candidate = datetime.combine(day, target_time)
-            if candidate <= now:
+            if not self._freq_matches(freq, candidate):
                 continue
-            if self._freq_matches(freq, candidate):
+
+            if candidate > now:
                 return candidate
+
+            if (now - candidate) <= timedelta(minutes=1):
+                near_past_candidate = candidate
+
+        if near_past_candidate is not None:
+            return near_past_candidate + timedelta(minutes=1)
         return None
 
     def _schedule_next_wake_if_possible(self, now: datetime | None = None) -> None:
@@ -1606,20 +1630,55 @@ class MainWindow(QMainWindow):
                 self._append_log(f"虚拟显示器安装失败：{message}")
             return
 
+        if message == "already-installed":
+            self._append_log("虚拟显示器驱动已存在，已尝试重新启用扩展显示模式。")
+
         ok_extend, msg_extend = self.virtual_display_service.enable_extend_mode()
         if ok_extend:
             self._append_log("虚拟显示器驱动安装成功，已切换为扩展显示模式。")
             return
         self._append_log(f"虚拟显示器驱动已安装，但扩展显示失败：{msg_extend}")
 
+    def _uninstall_virtual_display_driver(self) -> None:
+        result = QMessageBox.question(
+            self,
+            "确认卸载",
+            "将尝试卸载虚拟显示器设备与驱动包（需管理员权限）。是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
+
+        self._save_power_settings()
+        settings = self._get_power_settings()
+        inf = settings.get("virtual_display_driver_inf", "")
+        ok, message = self.virtual_display_service.uninstall_driver(inf)
+        if not ok:
+            if message == "admin-required":
+                self._append_log("虚拟显示器卸载失败：需要管理员权限运行 AutoPlua。")
+            else:
+                self._append_log(f"虚拟显示器卸载失败：{message}")
+            return
+
+        if message == "already-uninstalled":
+            self._append_log("未检测到可卸载的虚拟显示器驱动，当前已是卸载状态。")
+            return
+
+        self._append_log("虚拟显示器驱动已卸载。若系统显示未即时刷新，可手动重插显示配置或重启。")
+
     def _test_virtual_display_ready(self) -> None:
-        present = self.virtual_display_service.is_virtual_display_present()
-        if present:
+        driver_present = self.virtual_display_service.is_virtual_driver_device_present()
+        monitor_present = self.virtual_display_service.is_virtual_display_present()
+        if driver_present or monitor_present:
             ok_extend, msg = self.virtual_display_service.enable_extend_mode()
             if ok_extend:
                 self._append_log("虚拟显示器检测通过，扩展显示已启用。")
             else:
-                self._append_log(f"检测到虚拟显示器，但扩展显示启用失败：{msg}")
+                self._append_log(
+                    "检测到虚拟显示驱动，但扩展显示启用失败："
+                    f"{msg}。请在系统显示设置中确认“扩展这些显示器”。"
+                )
         else:
             self._append_log("未检测到虚拟显示器。可先选择 INF 后点击“安装并启用”。")
 
