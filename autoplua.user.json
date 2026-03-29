@@ -66,8 +66,10 @@
     {
       "name": "BAAH.exe",
       "command": "D:/data/BAAH2.0.6/BAAH.exe",
-      "args": [],
-      "launch_args_raw": "",
+      "args": [
+        "config_EN.json"
+      ],
+      "launch_args_raw": "config_EN.json",
       "input_mode": "background_window_message",
       "target_window_title": "BAAH",
       "opencv_step_retry_seconds": 30,
@@ -140,14 +142,16 @@
       }
     },
     {
-      "name": "MAA.exe",
-      "command": "D:/data10086/MAA-v5.15.5-win-x64/MAA.exe",
-      "args": [],
-      "launch_args_raw": "",
+      "name": "BetterGI.exe",
+      "command": "D:/data/GenshinAuto/BetterGI/BetterGI/BetterGI.exe",
+      "args": [
+        "-startOneDragon"
+      ],
+      "launch_args_raw": "-startOneDragon",
       "input_mode": "background_window_message",
-      "target_window_title": "MAA",
+      "target_window_title": "BetterGI",
       "opencv_step_retry_seconds": 30,
-      "cwd": "D:\\data10086\\MAA-v5.15.5-win-x64",
+      "cwd": "D:\\data\\GenshinAuto\\BetterGI\\BetterGI",
       "enabled": false,
       "start_time": "00:00",
       "end_time": "00:00",
@@ -163,14 +167,42 @@
       }
     },
     {
-      "name": "BetterGI.exe",
-      "command": "D:/data/GenshinAuto/BetterGI/BetterGI/BetterGI.exe",
-      "args": [],
-      "launch_args_raw": "",
-      "input_mode": "background_window_message",
-      "target_window_title": "BetterGI",
+      "name": "OneDragon-Launcher.exe",
+      "command": "D:/data/ZZZ_OneDragon/OneDragon-Launcher.exe",
+      "args": [
+        "-c"
+      ],
+      "launch_args_raw": "-c",
+      "input_mode": "foreground",
+      "target_window_title": "",
       "opencv_step_retry_seconds": 30,
-      "cwd": "D:\\data\\GenshinAuto\\BetterGI\\BetterGI",
+      "cwd": "D:\\data\\ZZZ_OneDragon",
+      "enabled": false,
+      "start_time": "17:50",
+      "end_time": "00:00",
+      "time_points": [
+        {
+          "start": "17:50",
+          "end": "00:00"
+        }
+      ],
+      "opencv_flow": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    {
+      "name": "March7th Launcher.exe",
+      "command": "D:/data10086/March7thAssistant_v2025.3.7/March7th Launcher.exe",
+      "args": [
+        "main",
+        "-e"
+      ],
+      "launch_args_raw": "main -e",
+      "input_mode": "foreground",
+      "target_window_title": "",
+      "opencv_step_retry_seconds": 30,
+      "cwd": "D:\\data10086\\March7thAssistant_v2025.3.7",
       "enabled": false,
       "start_time": "00:00",
       "end_time": "00:00",
@@ -190,12 +222,12 @@
   "power_enabled": true,
   "power_settings": {
     "boot_frequency": "每天",
-    "boot_time": "09:55",
+    "boot_time": "07:28",
     "shutdown_frequency": "每天",
     "shutdown_time": "01:00",
     "shutdown_action": "睡眠",
     "login_user": "3528137639@qq.com",
-    "login_password": "24751",
+    "login_password": "ZJDqtjs155755751",
     "virtual_display_auto_prepare": false,
     "virtual_display_auto_install": false,
     "virtual_display_prepare_on_app_start": true,

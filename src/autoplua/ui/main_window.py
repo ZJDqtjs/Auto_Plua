@@ -56,9 +56,6 @@ from autoplua.ui.styles import SIDEBAR_COLLAPSED_STYLE, SIDEBAR_EXPANDED_STYLE
 class MainWindow(QMainWindow):
     APP_REPOSITORY_URL = "https://github.com/ZJDqtjs/Auto_Plua"
     GITHUB_API_BASE = "https://api.github.com/repos/ZJDqtjs/Auto_Plua"
-    POWER_TICK_SECONDS = 30
-    POWER_WINDOW_SECONDS = 35
-    POWER_RESUME_GAP_SECONDS = 120
 
     app_log_signal = Signal(str)
     program_log_signal = Signal(str)
@@ -87,14 +84,11 @@ class MainWindow(QMainWindow):
         self.program_entries: list[dict] = []
         self.runtime_logs: list[str] = []
         self.program_runtime_logs: list[str] = []
-        self._power_state: dict[str, str] = {"boot": "", "shutdown": ""}
         self._project_runtime_active = False
         self._project_runtime_marks: dict[str, str] = {}
         self._program_runtime_job_id = "program_runtime_tick"
         self._app_log_follow_tail = True
         self._program_log_follow_tail = True
-        self._last_power_tick_at: datetime | None = None
-        self._scheduled_wake_marker = ""
 
         self.app_log_signal.connect(self._handle_append_log)
         self.program_log_signal.connect(self._handle_append_program_log)
@@ -369,7 +363,7 @@ class MainWindow(QMainWindow):
 
         task_btn = self._build_power_nav_button(
             title="Windows 任务计划",
-            description="仅跳转页面，不在此处开发具体任务计划功能",
+            description="由程序直接创建/更新系统任务，实现唤醒与关机调度",
             on_click=partial(self._open_power_subpage, "task"),
         )
         layout.addWidget(task_btn)
@@ -381,7 +375,10 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(wol_btn)
 
-        tip = QLabel("说明：完整的自动开机需要管理员权限、服务常驻和主板/BIOS 支持；当前版本已提供配置与定时触发能力。")
+        tip = QLabel(
+            "说明：当前版本通过 Windows 任务计划程序直接落地调度。"
+            "\n唤醒能力依赖系统睡眠/休眠与 BIOS 支持（S5 断电关机通常无法被任务计划唤醒）。"
+        )
         tip.setWordWrap(True)
         tip.setStyleSheet("font-size: 13px; color: #666;")
         layout.addWidget(tip)
@@ -1372,97 +1369,30 @@ class MainWindow(QMainWindow):
     def _apply_power_schedule(self) -> None:
         try:
             if self.config.get("power_enabled", False):
-                self.scheduler_service.add_interval_job(
-                    job_id="power_automation_tick",
-                    seconds=self.POWER_TICK_SECONDS,
-                    func=self._power_automation_tick,
-                )
-                self._last_power_tick_at = datetime.now() - timedelta(seconds=self.POWER_WINDOW_SECONDS)
-                self._schedule_next_wake_if_possible()
-                self._append_log("电源自动化调度已启用")
+                settings = self._get_power_settings()
+                ok, messages = self.power_service.apply_windows_power_schedule(settings)
+                for msg in messages:
+                    self._append_log(msg)
+
+                user = settings.get("login_user", "")
+                password = settings.get("login_password", "")
+                if user and password:
+                    self._configure_auto_login_registry(user, password)
+
+                if ok:
+                    self._append_log("电源自动化调度已同步到 Windows 任务计划程序")
+                else:
+                    self._append_log("电源自动化调度同步失败，请检查管理员权限与任务计划服务状态")
             else:
-                self.scheduler_service.remove_job("power_automation_tick")
-                self.power_service.cancel_wake()
-                self._scheduled_wake_marker = ""
-                self._append_log("电源自动化调度已停用")
+                ok, messages = self.power_service.clear_windows_power_schedule()
+                for msg in messages:
+                    self._append_log(msg)
+                if ok:
+                    self._append_log("电源自动化调度已停用，并清理 Windows 任务")
+                else:
+                    self._append_log("电源自动化调度已停用，但部分 Windows 任务清理失败")
         except Exception:
             pass
-
-    def _power_automation_tick(self) -> None:
-        if not self.config.get("power_enabled", False):
-            return
-
-        settings = self._get_power_settings()
-        now = datetime.now()
-        window_start = self._last_power_tick_at or (now - timedelta(seconds=self.POWER_WINDOW_SECONDS))
-        self._last_power_tick_at = now
-
-        gap_seconds = (now - window_start).total_seconds()
-        if gap_seconds > self.POWER_RESUME_GAP_SECONDS:
-            # After resume/manual wake, avoid replaying actions missed hours ago.
-            self._append_log(
-                f"检测到系统恢复或长时间停顿（约 {int(gap_seconds)} 秒），"
-                "已跳过历史补触发并从当前时间继续调度"
-            )
-            window_start = now - timedelta(seconds=self.POWER_WINDOW_SECONDS)
-
-        boot_hit, boot_target = self._time_hit_in_window(
-            settings.get("boot_frequency", "每天"),
-            settings.get("boot_time", "06:30"),
-            window_start,
-            now,
-        )
-        if boot_hit and boot_target is not None:
-            day_key = boot_target.strftime("%Y-%m-%d")
-            if self._power_state.get("boot") != day_key:
-                self._power_state["boot"] = day_key
-                self._execute_boot_login(settings)
-
-        shutdown_hit, shutdown_target = self._time_hit_in_window(
-            settings.get("shutdown_frequency", "每天"),
-            settings.get("shutdown_time", "23:00"),
-            window_start,
-            now,
-        )
-        if shutdown_hit and shutdown_target is not None:
-            day_key = shutdown_target.strftime("%Y-%m-%d")
-            if self._power_state.get("shutdown") != day_key:
-                self._power_state["shutdown"] = day_key
-                self._execute_shutdown_action(settings.get("shutdown_action", "关机"))
-
-        self._schedule_next_wake_if_possible(now=now)
-
-    @staticmethod
-    def _freq_matches(freq: str, now: datetime) -> bool:
-        weekday = now.weekday()
-        if freq == "每天":
-            return True
-        if freq == "工作日":
-            return weekday < 5
-        if freq == "周末":
-            return weekday >= 5
-        return True
-
-    def _execute_boot_login(self, settings: dict) -> None:
-        self._append_log("触发定时开机登录任务")
-
-        user = settings.get("login_user", "")
-        password = settings.get("login_password", "")
-        if user and password:
-            self._configure_auto_login_registry(user, password)
-
-    def _execute_shutdown_action(self, action: str) -> None:
-        self._append_log(f"触发定时电源动作：{action}")
-        if action == "关机":
-            self.power_service.shutdown()
-        elif action == "注销":
-            subprocess.run(["shutdown", "/l"], check=False)
-        elif action == "重启":
-            self.power_service.restart()
-        elif action == "睡眠":
-            self.power_service.sleep()
-        elif action == "锁屏":
-            self.power_service.lock()
 
     def _configure_auto_login_registry(self, user: str, password: str) -> None:
         domain = os.getenv("COMPUTERNAME", "")
@@ -1492,78 +1422,6 @@ class MainWindow(QMainWindow):
                 capture_output=True,
             )
         self._append_log("已尝试写入自动登录注册表（需管理员权限）")
-
-    @staticmethod
-    def _time_hit_in_window(freq: str, hhmm: str, window_start: datetime, window_end: datetime) -> tuple[bool, datetime | None]:
-        try:
-            target_time = datetime.strptime(hhmm.strip(), "%H:%M").time()
-        except ValueError:
-            return False, None
-
-        start = min(window_start, window_end)
-        end = max(window_start, window_end)
-        days = (end.date() - start.date()).days
-
-        for delta in range(days + 1):
-            day_dt = start + timedelta(days=delta)
-            candidate = datetime.combine(day_dt.date(), target_time)
-            if not (start < candidate <= end):
-                continue
-            if MainWindow._freq_matches(freq, candidate):
-                return True, candidate
-
-        return False, None
-
-    def _next_occurrence(self, freq: str, hhmm: str, now: datetime) -> datetime | None:
-        try:
-            target_time = datetime.strptime(hhmm.strip(), "%H:%M").time()
-        except ValueError:
-            return None
-
-        near_past_candidate: datetime | None = None
-        for offset in range(0, 8):
-            day = (now + timedelta(days=offset)).date()
-            candidate = datetime.combine(day, target_time)
-            if not self._freq_matches(freq, candidate):
-                continue
-
-            if candidate > now:
-                return candidate
-
-            if (now - candidate) <= timedelta(minutes=1):
-                near_past_candidate = candidate
-
-        if near_past_candidate is not None:
-            return near_past_candidate + timedelta(minutes=1)
-        return None
-
-    def _schedule_next_wake_if_possible(self, now: datetime | None = None) -> None:
-        if not self.config.get("power_enabled", False):
-            return
-
-        settings = self._get_power_settings()
-        now = now or datetime.now()
-        next_boot = self._next_occurrence(
-            settings.get("boot_frequency", "每天"),
-            settings.get("boot_time", "06:30"),
-            now,
-        )
-        if next_boot is None:
-            return
-
-        wake_target = next_boot - timedelta(minutes=1)
-        if wake_target <= now:
-            wake_target = now + timedelta(seconds=15)
-
-        marker = wake_target.strftime("%Y-%m-%d %H:%M")
-        if marker == self._scheduled_wake_marker:
-            return
-
-        if self.power_service.schedule_wake(wake_target):
-            self._scheduled_wake_marker = marker
-            self._append_log(f"已安排下一次系统唤醒：{wake_target.strftime('%Y-%m-%d %H:%M')}")
-        else:
-            self._append_log("系统唤醒定时器设置失败（可能缺少权限或系统策略不支持）")
 
     def _send_wol_packet(self, mac: str, host: str = "255.255.255.255", port: int = 9) -> None:
         cleaned = mac.replace(":", "").replace("-", "").strip()

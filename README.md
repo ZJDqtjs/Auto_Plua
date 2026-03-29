@@ -81,7 +81,8 @@ Auto_plua/
 
 ### 已实现能力
 
-- 睡眠唤醒：优先 `pywin32 + Task Scheduler COM`，失败回退 WaitableTimer
+- 睡眠唤醒：优先 `pywin32(COM)` 注册任务计划 `WakeToRun`，失败时回退 ScheduledTasks PowerShell
+- 定时关机/重启/睡眠/锁屏/注销：通过 `schtasks` 创建系统计划任务
 - 自动登录：写入 Winlogon 注册表（需要管理员权限）
 - 后台输入：窗口消息模式可避免抢占鼠标键盘
 - 息屏保护日志：截图源不可用时给出明确错误
