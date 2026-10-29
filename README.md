@@ -109,3 +109,13 @@ Auto_plua/
   - 目标窗口标题不匹配。
 - `step-timeout-20s-click-target-not-found`
   - 模板识别失败，检查模板质量、分辨率、窗口尺寸与 DPI。
+
+## 开源协议
+
+本项目原创代码采用 [MIT License](./LICENSE) 发布，允许商业使用、修改和再分发。
+
+`drivers/virtual_display/` 中随项目分发的虚拟显示驱动来自
+[Virtual-Display-Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)，
+版权归上游项目所有，并按其 MIT License 授权；该目录中的许可证文件仅适用于该驱动及其相关文件。
+
+项目依赖和用户提供的模板图片可能分别受其各自的许可证或权利约束，不因本项目的 MIT License 自动改变。

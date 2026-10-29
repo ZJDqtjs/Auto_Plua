@@ -11,3 +11,8 @@ AutoPlua will:
 Packaging note:
 - Include the full drivers/virtual_display directory in your installer or release package.
 - Installation still requires Administrator privileges on Windows.
+
+License:
+- The bundled driver is from Virtual-Display-Driver and is distributed under
+  the MIT License. See LICENSE in this directory.
+- The driver source and copyright remain with the upstream project.
